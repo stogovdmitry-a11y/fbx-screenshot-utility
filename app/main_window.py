@@ -67,7 +67,7 @@ PASSES = (
     ("material", "Material"),
 )
 DEFAULT_PASSES = {"basecolor", "normal", "roughness", "material"}
-IMAGE_FILTER = "Картинки (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.bmp)"
+IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.bmp)"
 
 
 def apply_dark(app):
@@ -94,7 +94,7 @@ class DropLine(QLineEdit):
     def __init__(self):
         super().__init__()
         self.setAcceptDrops(True)
-        self.setPlaceholderText("не задано")
+        self.setPlaceholderText("not set")
         self.setClearButtonEnabled(True)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -156,7 +156,7 @@ def _pixmap_fitted(path, width):
 class SheetWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Лист")
+        self.setWindowTitle("Sheet")
         self.resize(1200, 860)
         self._path = ""
         self.label = QLabel()
@@ -190,7 +190,7 @@ class SheetWindow(QWidget):
         width = max(1, width)
         pixmap, error = _pixmap_fitted(self._path, width)
         if pixmap.isNull():
-            self.label.setText(f"Файл сохранён, превью не открылось:\n{error}")
+            self.label.setText(f"Saved, but the preview failed to open:\n{error}")
             return
         self.label.setPixmap(pixmap)
 
@@ -226,7 +226,7 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(1, 2)
         layout.addWidget(splitter, 2)
 
-        self.preview = QLabel("Здесь будет лист")
+        self.preview = QLabel("The sheet will show up here")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview.setMinimumHeight(220)
         self.preview.setStyleSheet("background: #2a2a2a;")
@@ -239,7 +239,7 @@ class MainWindow(QMainWindow):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setFixedHeight(88)
-        self.log.setPlaceholderText("Лог Blender")
+        self.log.setPlaceholderText("Blender log")
         layout.addWidget(self.log)
 
         blender_row = QHBoxLayout()
@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
         self.blender_edit = QLineEdit()
         self.blender_edit.setPlaceholderText(str(DEFAULT_BLENDER))
         blender_row.addWidget(self.blender_edit, 1)
-        browse_blender = QPushButton("Обзор")
+        browse_blender = QPushButton("Browse")
         browse_blender.clicked.connect(self._browse_blender)
         blender_row.addWidget(browse_blender)
         layout.addLayout(blender_row)
@@ -259,20 +259,20 @@ class MainWindow(QMainWindow):
 
         row = QHBoxLayout()
         self.fbx_edit = QLineEdit()
-        self.fbx_edit.setPlaceholderText("Перетащи FBX сюда или открой файл")
+        self.fbx_edit.setPlaceholderText("Drop an FBX here or browse")
         self.fbx_edit.returnPressed.connect(self.load_fbx)
         row.addWidget(self.fbx_edit, 1)
-        self.open_btn = QPushButton("Открыть FBX")
+        self.open_btn = QPushButton("Open FBX")
         self.open_btn.clicked.connect(self._browse_fbx)
         row.addWidget(self.open_btn)
         column.addLayout(row)
 
-        hint = QLabel("Пустая карта остаётся той, что уже записана в FBX. Слоты — как в файле, голова и волосы отдельно.")
+        hint = QLabel("An empty map keeps whatever is already in the FBX. Slots stay as in the file, head and hair separate.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #a8a8a8;")
         column.addWidget(hint)
 
-        self.reset_btn = QPushButton("Сбросить текстуры")
+        self.reset_btn = QPushButton("Reset textures")
         self.reset_btn.setEnabled(False)
         self.reset_btn.clicked.connect(self._reset_textures)
         column.addWidget(self.reset_btn, 0, Qt.AlignmentFlag.AlignLeft)
@@ -299,60 +299,60 @@ class MainWindow(QMainWindow):
         self.frames = QSpinBox()
         self.frames.setRange(1, 36)
         self.frames.setValue(6)
-        form.addRow("Кадры", self.frames)
+        form.addRow("Frames", self.frames)
 
         self.step = QDoubleSpinBox()
         self.step.setRange(0, 360)
         self.step.setDecimals(1)
         self.step.setValue(60)
         self.step.setSuffix("°")
-        form.addRow("Шаг", self.step)
+        form.addRow("Step", self.step)
 
         self.start = QDoubleSpinBox()
         self.start.setRange(-360, 360)
         self.start.setDecimals(1)
         self.start.setValue(0)
         self.start.setSuffix("°")
-        self.start.setToolTip("0° смотрит с выбранной стороны. Поворот вокруг оси Z.")
-        form.addRow("Старт", self.start)
+        self.start.setToolTip("0° looks from the chosen side. Orbit is around Z.")
+        form.addRow("Start", self.start)
 
         self.distance = QDoubleSpinBox()
         self.distance.setRange(0.4, 3)
         self.distance.setSingleStep(0.05)
         self.distance.setDecimals(2)
         self.distance.setValue(1.0)
-        self.distance.setToolTip("Множитель к дистанции, которую программа сама подбирает по габаритам.")
-        form.addRow("Дистанция", self.distance)
+        self.distance.setToolTip("Multiplier on the distance fitted to the model bounds.")
+        form.addRow("Distance", self.distance)
 
         self.height = QDoubleSpinBox()
         self.height.setRange(-1, 1)
         self.height.setSingleStep(0.05)
         self.height.setDecimals(2)
         self.height.setValue(0)
-        self.height.setToolTip("Сдвиг камеры вверх в долях высоты модели. Цель камеры остаётся в центре.")
-        form.addRow("Высота", self.height)
+        self.height.setToolTip("Camera lift as a fraction of the model height. The camera still aims at the center.")
+        form.addRow("Height", self.height)
 
         self.frame_size = QComboBox()
         for size in (384, 512, 768, 1024, 1536, 2048, 3072, 4096):
             self.frame_size.addItem(str(size), size)
         self.frame_size.setCurrentIndex(2)
-        self.frame_size.setToolTip("Длинная сторона готового листа, не одного кадра.")
-        form.addRow("Длинная сторона", self.frame_size)
+        self.frame_size.setToolTip("Long side of the finished sheet, not of one frame.")
+        form.addRow("Long side", self.frame_size)
 
         self.front = QComboBox()
         for value, label in (("-Y", "−Y"), ("+Y", "+Y"), ("-X", "−X"), ("+X", "+X")):
             self.front.addItem(label, value)
-        self.front.setToolTip("Какая сторона модели считается передом. Верх — Z, как после импорта FBX в Blender.")
-        form.addRow("Спереди", self.front)
+        self.front.setToolTip("Which side of the model is the front. Up is Z, as after importing the FBX into Blender.")
+        form.addRow("Front", self.front)
         column.addWidget(form_host)
 
-        self.invert_g = QCheckBox("Инвертировать G у нормалей (DirectX)")
+        self.invert_g = QCheckBox("Invert normal G (DirectX)")
         column.addWidget(self.invert_g)
 
         self.character = QCheckBox("Character Pipeline")
         self.character.setToolTip(
             "Masks: R roughness, G emissive, B metallic, A translucency. "
-            "Opacity в альфе Base Color, галка отдельно и по умолчанию выключена."
+            "Opacity is in the Base Color alpha, and that checkbox is off by default."
         )
         self.character.toggled.connect(self._apply_pipeline)
         column.addWidget(self.character)
@@ -362,7 +362,7 @@ class MainWindow(QMainWindow):
         self.bg_color_btn.setFixedWidth(88)
         self.bg_color_btn.clicked.connect(self._pick_bg_color)
         bg_row = QHBoxLayout()
-        bg_row.addWidget(QLabel("Фон"))
+        bg_row.addWidget(QLabel("Background"))
         bg_row.addWidget(self.bg_color_btn)
         bg_row.addStretch(1)
         column.addLayout(bg_row)
@@ -371,15 +371,15 @@ class MainWindow(QMainWindow):
         self.surface_model = QComboBox()
         self.surface_model.addItem("Smoothness", "smoothness")
         self.surface_model.addItem("Roughness", "roughness")
-        self.surface_model.setToolTip("Smoothness: светлое — гладкое. Roughness: светлое — шершавое.")
+        self.surface_model.setToolTip("Smoothness: bright is smooth. Roughness: bright is rough.")
         self.surface_model.currentIndexChanged.connect(self._apply_surface_model)
         surface_row = QHBoxLayout()
-        self._surface_caption = QLabel("Блик")
+        self._surface_caption = QLabel("Highlight")
         surface_row.addWidget(self._surface_caption)
         surface_row.addWidget(self.surface_model, 1)
         column.addLayout(surface_row)
 
-        passes = QGroupBox("Строки")
+        passes = QGroupBox("Rows")
         grid = QGridLayout(passes)
         self.pass_boxes = {}
         for index, (key, label) in enumerate(PASSES):
@@ -389,7 +389,7 @@ class MainWindow(QMainWindow):
             grid.addWidget(box, index // 2, index % 2)
         column.addWidget(passes)
 
-        grid_box = QGroupBox("Строка с wireframe")
+        grid_box = QGroupBox("Wireframe row")
         grid_box.setCheckable(True)
         grid_box.setChecked(False)
         grid_form = QFormLayout(grid_box)
@@ -400,17 +400,17 @@ class MainWindow(QMainWindow):
         material_index = self.grid_pass.findData("material")
         if material_index >= 0:
             self.grid_pass.setCurrentIndex(material_index)
-        grid_form.addRow("Тип", self.grid_pass)
+        grid_form.addRow("Type", self.grid_pass)
         self.grid_thickness = QSpinBox()
         self.grid_thickness.setRange(1, 32)
         self.grid_thickness.setValue(2)
         self.grid_thickness.setSuffix(" px")
-        grid_form.addRow("Толщина", self.grid_thickness)
+        grid_form.addRow("Thickness", self.grid_thickness)
         self._wire_color = QColor("#111111")
         self.wire_color_btn = QPushButton()
         self.wire_color_btn.setFixedWidth(72)
         self.wire_color_btn.clicked.connect(self._pick_wire_color)
-        grid_form.addRow("Цвет", self.wire_color_btn)
+        grid_form.addRow("Color", self.wire_color_btn)
         self._paint_wire_button()
         grid_box.toggled.connect(self._set_grid_enabled)
         column.addWidget(grid_box)
@@ -419,41 +419,41 @@ class MainWindow(QMainWindow):
         captions = QFormLayout()
         captions.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
         self.caption_name = QLineEdit()
-        self.caption_name.setPlaceholderText("Попадёт на лист как есть")
-        captions.addRow("Имя", self.caption_name)
+        self.caption_name.setPlaceholderText("Printed on the sheet as typed")
+        captions.addRow("Name", self.caption_name)
         self.caption_task = QLineEdit()
-        self.caption_task.setPlaceholderText("Попадёт на лист как есть")
-        captions.addRow("Задача", self.caption_task)
+        self.caption_task.setPlaceholderText("Printed on the sheet as typed")
+        captions.addRow("Task", self.caption_task)
         column.addLayout(captions)
 
         output_row = QHBoxLayout()
         self.output_edit = QLineEdit()
-        self.output_edit.setPlaceholderText("Куда сохранить PNG")
+        self.output_edit.setPlaceholderText("Where to save the PNG")
         self.output_edit.textEdited.connect(self._output_edited)
         output_row.addWidget(self.output_edit, 1)
-        browse_out = QPushButton("Обзор")
+        browse_out = QPushButton("Browse")
         browse_out.clicked.connect(self._browse_output)
         output_row.addWidget(browse_out)
         column.addLayout(output_row)
 
-        self.date_in_name = QCheckBox("Дата в имени файла")
+        self.date_in_name = QCheckBox("Date in the file name")
         self.date_in_name.toggled.connect(self._refresh_output_name)
         column.addWidget(self.date_in_name)
 
-        self.number_if_exists = QCheckBox("Нумерация, если файл уже есть")
+        self.number_if_exists = QCheckBox("Number the file if it already exists")
         column.addWidget(self.number_if_exists)
 
-        self.separate_window = QCheckBox("Открывать лист в отдельном окне")
+        self.separate_window = QCheckBox("Open the sheet in a separate window")
         self.separate_window.toggled.connect(self._toggle_separate_preview)
         column.addWidget(self.separate_window)
 
         buttons = QHBoxLayout()
-        self.render_btn = QPushButton("Собрать лист")
+        self.render_btn = QPushButton("Build sheet")
         self.render_btn.setEnabled(False)
         self.render_btn.clicked.connect(self.render)
         self.render_btn.setStyleSheet("padding: 8px 18px; font-weight: 600;")
         buttons.addWidget(self.render_btn)
-        self.cancel_btn = QPushButton("Отмена")
+        self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel)
         buttons.addWidget(self.cancel_btn)
@@ -464,7 +464,7 @@ class MainWindow(QMainWindow):
         self.progress.setTextVisible(False)
         self.progress.setRange(0, 1)
         column.addWidget(self.progress)
-        self.status = QLabel("Открой FBX")
+        self.status = QLabel("Open an FBX")
         self.status.setWordWrap(True)
         column.addWidget(self.status)
         column.addStretch(1)
@@ -592,7 +592,7 @@ class MainWindow(QMainWindow):
             self.blender_edit.setText(path)
 
     def _browse_output(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Лист", self.output_edit.text() or str(self._output_dir()), "PNG (*.png)")
+        path, _ = QFileDialog.getSaveFileName(self, "Sheet", self.output_edit.text() or str(self._output_dir()), "PNG (*.png)")
         if path:
             if not path.lower().endswith(".png"):
                 path += ".png"
@@ -684,7 +684,7 @@ class MainWindow(QMainWindow):
     def _cancel(self):
         if self._thread is not None:
             self._thread.cancel()
-            self.status.setText("Останавливаю…")
+            self.status.setText("Stopping…")
 
     def _log_line(self, line):
         self.log.appendPlainText(line)
@@ -727,14 +727,14 @@ class MainWindow(QMainWindow):
     def _fail(self, text):
         self.log.appendPlainText(text)
         lines = [line for line in text.strip().splitlines() if line.strip()]
-        QMessageBox.warning(self, "Screenshot Utility", "\n".join(lines[-12:]) or "Не вышло")
+        QMessageBox.warning(self, "Screenshot Utility", "\n".join(lines[-12:]) or "Failed")
 
     def load_fbx(self):
         fbx = self.fbx_edit.text().strip()
         if not fbx:
             return
         if not Path(fbx).is_file():
-            QMessageBox.warning(self, "Screenshot Utility", "FBX не найден")
+            QMessageBox.warning(self, "Screenshot Utility", "FBX not found")
             return
         self._settings.setValue("fbx_dir", str(Path(fbx).parent))
         self._settings.setValue("last_fbx", str(Path(fbx).resolve()))
@@ -743,7 +743,7 @@ class MainWindow(QMainWindow):
         self._save_textures()
         saved = self._textures_for(Path(fbx).resolve())
         blender = self._blender_path()
-        self.status.setText("Читаю FBX…")
+        self.status.setText("Reading FBX…")
         self.progress.setRange(0, 0)
 
         def work(thread):
@@ -767,7 +767,7 @@ class MainWindow(QMainWindow):
 
     def _show_slots(self, payload):
         if payload is None:
-            self.status.setText("Отменено")
+            self.status.setText("Cancelled")
             return
         info, saved = payload
         while self.slot_layout.count():
@@ -785,12 +785,12 @@ class MainWindow(QMainWindow):
         self.slot_layout.addStretch(1)
         size = info.get("size") or [0, 0, 0]
         self.status.setText(
-            f"Мешей: {info.get('mesh_count', 0)}, слотов: {len(self._slots)}. "
-            f"Габарит {size[0]:.3f} × {size[1]:.3f} × {size[2]:.3f}"
+            f"Meshes: {info.get('mesh_count', 0)}, slots: {len(self._slots)}. "
+            f"Size {size[0]:.3f} × {size[1]:.3f} × {size[2]:.3f}"
         )
         self.render_btn.setEnabled(bool(self._slots))
         if not self._slots:
-            QMessageBox.information(self, "Screenshot Utility", "В FBX нет мешей")
+            QMessageBox.information(self, "Screenshot Utility", "The FBX has no meshes")
 
     def _active_channels(self):
         return OWL_CHANNELS if self.character.isChecked() else CHANNELS
@@ -877,7 +877,7 @@ class MainWindow(QMainWindow):
             if saved_path:
                 line.setText(saved_path)
             elif mat.get(f"has_{key}"):
-                line.setPlaceholderText("из FBX")
+                line.setPlaceholderText("from FBX")
             browse = QPushButton("…")
             browse.setFixedWidth(32)
             browse.clicked.connect(lambda _checked=False, target=line: self._browse_image(target))
@@ -892,8 +892,8 @@ class MainWindow(QMainWindow):
             hosts[key] = host
             if key == "roughness":
                 roughness_label = title
-        alpha = QCheckBox("Альфа из Base Color")
-        alpha.setToolTip("Opacity в альфе Base Color. В Character Pipeline обычно не нужно.")
+        alpha = QCheckBox("Alpha from Base Color")
+        alpha.setToolTip("Opacity comes from the Base Color alpha. Usually left off for the Character Pipeline.")
         if "alpha_from_basecolor" in previous:
             alpha.setChecked(bool(previous["alpha_from_basecolor"]))
         elif not self.character.isChecked():
@@ -947,7 +947,7 @@ class MainWindow(QMainWindow):
         self._save_textures()
 
     def _browse_image(self, line):
-        path, _ = QFileDialog.getOpenFileName(self, "Текстура", self._texture_dir(), IMAGE_FILTER)
+        path, _ = QFileDialog.getOpenFileName(self, "Texture", self._texture_dir(), IMAGE_FILTER)
         if path:
             line.setText(path)
             self._remember_texture_dir(path)
@@ -971,7 +971,7 @@ class MainWindow(QMainWindow):
         self.wire_color_btn.setText(color)
 
     def _pick_wire_color(self):
-        chosen = QColorDialog.getColor(self._wire_color, self, "Цвет wireframe")
+        chosen = QColorDialog.getColor(self._wire_color, self, "Wireframe color")
         if chosen.isValid():
             self._wire_color = chosen
             self._paint_wire_button()
@@ -984,7 +984,7 @@ class MainWindow(QMainWindow):
         self.bg_color_btn.setText(color)
 
     def _pick_bg_color(self):
-        chosen = QColorDialog.getColor(self._bg_color, self, "Цвет фона")
+        chosen = QColorDialog.getColor(self._bg_color, self, "Background color")
         if chosen.isValid():
             self._bg_color = chosen
             self._paint_bg_button()
@@ -1014,17 +1014,17 @@ class MainWindow(QMainWindow):
         if grid and grid["pass"] not in render_passes:
             render_passes.append(grid["pass"])
         if not Path(fbx).is_file():
-            QMessageBox.warning(self, "Screenshot Utility", "FBX не найден")
+            QMessageBox.warning(self, "Screenshot Utility", "FBX not found")
             return
         if not render_passes:
-            QMessageBox.warning(self, "Screenshot Utility", "Включи хотя бы одну строку")
+            QMessageBox.warning(self, "Screenshot Utility", "Turn on at least one row")
             return
         if not output:
-            QMessageBox.warning(self, "Screenshot Utility", "Укажи, куда сохранить PNG")
+            QMessageBox.warning(self, "Screenshot Utility", "Choose where to save the PNG")
             return
         self._remember_output_dir(output)
         if not Path(self._blender_path()).is_file():
-            QMessageBox.warning(self, "Screenshot Utility", "Не вижу blender.exe. Внизу окна путь до Blender 4.5.")
+            QMessageBox.warning(self, "Screenshot Utility", "Can't find blender.exe. Set the Blender 4.5 path at the bottom of the window.")
             return
         materials = self._collect_materials()
         missing = []
@@ -1034,10 +1034,10 @@ class MainWindow(QMainWindow):
                 if path and not Path(path).is_file():
                     missing.append(f"{name} / {label}")
         if missing:
-            QMessageBox.warning(self, "Screenshot Utility", "Нет таких текстур:\n" + "\n".join(missing))
+            QMessageBox.warning(self, "Screenshot Utility", "These textures are missing:\n" + "\n".join(missing))
             return
 
-        self.status.setText("Собираю лист…")
+        self.status.setText("Building the sheet…")
         self.progress.setRange(0, 0)
         self.log.clear()
         blender = self._blender_path()
@@ -1108,7 +1108,7 @@ class MainWindow(QMainWindow):
 
     def _show_sheet(self, path):
         if not path:
-            self.status.setText("Отменено")
+            self.status.setText("Cancelled")
             return
         self._preview_path = path
         if self.separate_window.isChecked():
@@ -1116,7 +1116,7 @@ class MainWindow(QMainWindow):
                 self._sheet_window = SheetWindow()
             self._sheet_window.show_sheet(path)
             self.preview.setPixmap(QPixmap())
-            self.preview.setText("Лист открыт в отдельном окне")
+            self.preview.setText("Sheet is open in a separate window")
         else:
             self._update_preview()
         self.status.setText(path)
@@ -1125,7 +1125,7 @@ class MainWindow(QMainWindow):
         self.preview_scroll.setVisible(not separate)
         if separate:
             self.preview.setPixmap(QPixmap())
-            self.preview.setText("Лист откроется в отдельном окне")
+            self.preview.setText("The sheet will open in a separate window")
         elif self._preview_path:
             self._update_preview()
 
@@ -1137,7 +1137,7 @@ class MainWindow(QMainWindow):
         width = max(1, self.preview_scroll.viewport().width() - 8)
         pixmap, error = _pixmap_fitted(self._preview_path, width)
         if pixmap.isNull():
-            self.preview.setText(f"Файл сохранён, превью не открылось:\n{error}")
+            self.preview.setText(f"Saved, but the preview failed to open:\n{error}")
             return
         self.preview.setPixmap(pixmap)
 

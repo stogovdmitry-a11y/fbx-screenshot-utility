@@ -17,7 +17,7 @@ class BlenderError(RuntimeError):
 
 def run_blender(blender, script, args, on_line=None, proc_slot=None):
     if not Path(blender).is_file():
-        raise BlenderError(f"Blender не найден: {blender}")
+        raise BlenderError(f"Blender not found: {blender}")
     command = [
         str(blender),
         "--background",
@@ -55,7 +55,7 @@ def run_blender(blender, script, args, on_line=None, proc_slot=None):
         proc_slot.clear()
     if code != 0:
         tail = "\n".join(lines[-40:])
-        raise BlenderError(tail or f"Blender завершился с кодом {code}")
+        raise BlenderError(tail or f"Blender exited with code {code}")
     return lines
 
 

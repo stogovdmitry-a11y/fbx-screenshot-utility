@@ -19,7 +19,7 @@ def import_fbx(path):
         use_image_search=False,
     )
     if result != {"FINISHED"}:
-        raise RuntimeError(f"FBX не импортировался: {result}")
+        raise RuntimeError(f"FBX import failed: {result}")
 
 
 def mesh_objects():
@@ -104,7 +104,7 @@ def world_bounds(objects):
             maximum.z = max(maximum.z, world.z)
             any_point = True
     if not any_point:
-        raise RuntimeError("В FBX нет мешей")
+        raise RuntimeError("The FBX has no meshes")
     return minimum, maximum
 
 

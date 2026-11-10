@@ -114,7 +114,7 @@ def build_sheet(frame_dir, passes, frame_count, output_path, name="", task="", g
     background = tuple(background or SHEET_BG)
     rows = _sheet_rows(passes, labels, grid)
     if not rows:
-        raise ValueError("Нет строк для листа")
+        raise ValueError("No rows to put on the sheet")
     with Image.open(frame_dir / f"{rows[0][0]}_00.png") as first:
         frame_w, frame_h = first.size
     footer = _footer_lines(name, task, frame_w)

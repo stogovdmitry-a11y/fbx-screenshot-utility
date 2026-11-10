@@ -528,7 +528,7 @@ def main():
     done = 0
     front = job.get("front") or "-Y"
     if front not in FRONTS:
-        raise RuntimeError(f"Неизвестная сторона спереди: {front}")
+        raise RuntimeError(f"Unknown front side: {front}")
 
     for pass_name in passes:
         apply_pass(pass_name, resolved)
