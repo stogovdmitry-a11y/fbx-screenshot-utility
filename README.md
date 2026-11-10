@@ -1,0 +1,54 @@
+# FBX Screenshot Utility
+
+Desktop app for Windows. Drop an FBX in, assign textures to the existing material slots, and build a turnaround sheet. Blender 4.5 renders in the background. There is no live viewport.
+
+![Screenshot Utility](docs/screenshot.png)
+
+## What it does
+
+- Reads an FBX and keeps the material slot names. Head and hair stay separate.
+- An empty texture field keeps whatever is already stored in the FBX.
+- Builds one PNG sheet. Each row is a pass, each column is a camera angle.
+- The **Long side** value is the long side of the finished sheet, not of a single frame.
+- Camera: frame count, even step, start angle, distance scale, and height as a fraction of the model. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
+- Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass.
+- Name and task are printed on the sheet. The date can be added to the footer and to the file name. If that file already exists, a number is appended.
+- Background color is shared by the render and the sheet padding.
+- The sheet can open in its own window. Last folders, texture assignments, and options are remembered.
+
+## Character Pipeline
+
+On by default. This is the packed character layout, not a set of separate roughness and metallic files.
+
+| Slot | What it is |
+| --- | --- |
+| Base Color | Albedo. Opacity can live in the alpha channel. |
+| Masks | Packed mask. See the channels below. |
+| Normal | Normal map. |
+| Special Masks | Optional extra mask. Off unless you turn that row on. |
+
+**Masks**
+
+| Channel | Map |
+| --- | --- |
+| R | Roughness. Bright is rough. |
+| G | Emissive. |
+| B | Metallic. |
+| A | Translucency. |
+
+**Alpha from Base Color** is off by default. Turn it on only when the base color really carries opacity. Hair cards often need it. A solid head usually does not.
+
+**Special Masks** is an optional texture and an optional sheet row. Leave both alone unless you want that mask on the sheet.
+
+Turn Character Pipeline off to assign Roughness or Smoothness, Metallic, AO, and Opacity as separate files. Smoothness means bright is glossy (`1 − roughness`).
+
+## Run
+
+Requires Python 3.13 and Blender 4.5.
+
+```bat
+py -3.13 -m venv .venv
+.venv\Scripts\python -m pip install -r requirements.txt
+```
+
+Then launch `Screenshot Utility.bat`. Point the Blender field at `blender.exe` if it is not in the default install path.
