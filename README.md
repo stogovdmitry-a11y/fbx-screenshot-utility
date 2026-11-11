@@ -57,7 +57,7 @@ Then launch `Screenshot Utility.bat`. Point the Blender field at `blender.exe` i
 
 `addons/screenshot_utility.zip` is a Blender 4.5 addon. In Blender: Edit → Preferences → Add-ons → Install from Disk, pick that zip, then enable **Screenshot Utility**.
 
-The button is **Build Screen List**. It sits on the right side of the top bar, next to the GoB buttons, and has a monitor icon.
+The button is **Build Screen List**. It sits in the top right corner of the Blender window and has a monitor icon.
 
 It exports the meshes and starts a sheet in this utility, using the settings already set here (angles, passes, background, captions).
 

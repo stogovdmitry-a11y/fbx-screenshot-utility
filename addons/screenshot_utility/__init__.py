@@ -238,7 +238,7 @@ def ctypes_open(pid):
 
 
 def _draw_topbar(self, context):
-    # Same slot GoB uses: the right half of the top bar, not the left menus.
+    # Right side of the top bar, not the left menus.
     if context.region.alignment != "RIGHT":
         return
     self.layout.operator("screenshot_utility.send", text="Build Screen List", icon="DESKTOP")
