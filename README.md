@@ -52,3 +52,15 @@ py -3.13 -m venv .venv
 ```
 
 Then launch `Screenshot Utility.bat`. Point the Blender field at `blender.exe` if it is not in the default install path.
+
+## Blender addon
+
+`addons/screenshot_utility.zip` is a Blender 4.5 addon. In Blender: Edit → Preferences → Add-ons → Install from Disk, pick that zip, then enable **Screenshot Utility**.
+
+The button is **Build Screen List**. It sits on the right side of the top bar, next to the GoB buttons, and has a monitor icon.
+
+It exports the meshes and starts a sheet in this utility, using the settings already set here (angles, passes, background, captions).
+
+- A selection sends those meshes and their child meshes. With nothing selected, it sends every visible mesh.
+- Textures already on the materials stay in the FBX. Empty texture fields in the utility still keep whatever the file already has.
+- If this window is closed, the button opens it and then renders. Open the utility once so the addon knows where it lives. If it still cannot find it, set **Utility folder** in the addon preferences to this project folder.

@@ -35,6 +35,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from app.bridge import publish, take_request, unpublish
 from app.composite import PASS_LABELS, build_sheet, frame_size_for_long_side
 from app.runner import DEFAULT_BLENDER, BlenderError, inspect_fbx, render_sheet
 
@@ -210,8 +211,14 @@ class MainWindow(QMainWindow):
         self._sheet_window = None
         self._loaded_fbx = ""
         self._loading_slots = False
+        self._render_after_load = False
+        self._render_when_free = False
         self._build()
         self._restore()
+        publish()
+        self._inbox_timer = QTimer(self)
+        self._inbox_timer.timeout.connect(self._take_inbox)
+        self._inbox_timer.start(500)
 
     def _build(self):
         root = QWidget()
@@ -525,6 +532,8 @@ class MainWindow(QMainWindow):
             self._wire_color = QColor("#111111")
         self._paint_wire_button()
         last_fbx = self._settings.value("last_fbx", "") or ""
+        if self._take_inbox():
+            return
         if last_fbx and Path(last_fbx).is_file():
             self.fbx_edit.setText(last_fbx)
             self.load_fbx()
@@ -557,6 +566,7 @@ class MainWindow(QMainWindow):
         self._save_textures()
 
     def closeEvent(self, event):
+        unpublish()
         self._save_settings()
         if self._sheet_window is not None:
             self._sheet_window.close()
@@ -716,9 +726,46 @@ class MainWindow(QMainWindow):
         thread.progress.connect(self._on_progress)
         thread.failed.connect(self._fail)
         thread.succeeded.connect(on_ok)
-        thread.finished.connect(lambda: self._set_busy(False))
+        thread.finished.connect(self._on_job_finished)
         self._thread = thread
         thread.start()
+
+    def _on_job_finished(self):
+        if self.sender() is not self._thread:
+            return
+        cancelled = self._thread.cancelled
+        self._set_busy(False)
+        if cancelled:
+            self._render_after_load = False
+            self._render_when_free = False
+            return
+        if self._render_when_free:
+            self._render_when_free = False
+            self.render()
+
+    def _take_inbox(self):
+        if self._render_after_load or self._render_when_free:
+            return False
+        if self._thread is not None and self._thread.isRunning():
+            return False
+        request = take_request()
+        if not request:
+            return False
+        fbx = str(request.get("fbx") or "")
+        if not Path(fbx).is_file():
+            self.status.setText("Blender sent a file, but it is already gone")
+            return False
+        name = str(request.get("name") or "").strip()
+        if name and not self.caption_name.text().strip():
+            self.caption_name.setText(name)
+        self._render_after_load = bool(request.get("render", True))
+        self.fbx_edit.setText(fbx)
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        self.status.setText("From Blender…")
+        self.load_fbx()
+        return True
 
     def _on_progress(self, done, total, pass_name):
         self.progress.setRange(0, total)
@@ -726,6 +773,10 @@ class MainWindow(QMainWindow):
         self.status.setText(f"{PASS_LABELS.get(pass_name, pass_name)}   {done}/{total}")
 
     def _fail(self, text):
+        if self.sender() is not self._thread:
+            return
+        self._render_after_load = False
+        self._render_when_free = False
         self.log.appendPlainText(text)
         lines = [line for line in text.strip().splitlines() if line.strip()]
         QMessageBox.warning(self, "Screenshot Utility", "\n".join(lines[-12:]) or "Failed")
@@ -767,6 +818,11 @@ class MainWindow(QMainWindow):
         self._start(work, self._show_slots)
 
     def _show_slots(self, payload):
+        if self.sender() is not self._thread:
+            return
+        pending = self._render_after_load
+        self._render_after_load = False
+        self._render_when_free = False
         if payload is None:
             self.status.setText("Cancelled")
             return
@@ -792,6 +848,8 @@ class MainWindow(QMainWindow):
         self.render_btn.setEnabled(bool(self._slots))
         if not self._slots:
             QMessageBox.information(self, "Screenshot Utility", "The FBX has no meshes")
+            return
+        self._render_when_free = pending
 
     def _active_channels(self):
         return OWL_CHANNELS if self.character.isChecked() else CHANNELS
