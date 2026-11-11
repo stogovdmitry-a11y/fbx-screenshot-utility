@@ -1,8 +1,10 @@
 """Desktop window: FBX in, turnaround sheet out. Blender stays in the background."""
 
+import ctypes
 import json
 import re
 import shutil
+import sys
 import tempfile
 from datetime import date
 from pathlib import Path
@@ -17,7 +19,6 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -380,13 +381,13 @@ class MainWindow(QMainWindow):
         column.addLayout(surface_row)
 
         passes = QGroupBox("Rows")
-        grid = QGridLayout(passes)
+        pass_list = QVBoxLayout(passes)
         self.pass_boxes = {}
-        for index, (key, label) in enumerate(PASSES):
+        for key, label in PASSES:
             box = QCheckBox(label)
             box.setChecked(key in DEFAULT_PASSES)
             self.pass_boxes[key] = box
-            grid.addWidget(box, index // 2, index % 2)
+            pass_list.addWidget(box)
         column.addWidget(passes)
 
         grid_box = QGroupBox("Wireframe row")
@@ -1146,9 +1147,19 @@ class MainWindow(QMainWindow):
         self._update_preview()
 
 
+def _set_windows_app_id():
+    """Taskbar otherwise labels the window with the host exe: pythonw."""
+    if sys.platform != "win32":
+        return
+    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("ScreenshotUtility.App")
+
+
 def main():
+    _set_windows_app_id()
     QImageReader.setAllocationLimit(0)
     app = QApplication([])
+    app.setApplicationName("Screenshot Utility")
+    app.setApplicationDisplayName("Screenshot Utility")
     apply_dark(app)
     window = MainWindow()
     window.show()
