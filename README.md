@@ -44,14 +44,19 @@ Turn Character Pipeline off to assign Roughness or Smoothness, Metallic, AO, and
 
 ## Run
 
-Requires Python 3.13 and Blender 4.5.
+Windows. Two programs have to be installed first:
+
+- [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. The `py -3.13` command below comes from that installer.
+- [Blender 4.5](https://www.blender.org/download/releases/4-5/). The sheet is rendered by Blender in the background. There is no live viewport.
+
+Then, from this folder:
 
 ```bat
 py -3.13 -m venv .venv
 .venv\Scripts\python -m pip install -r requirements.txt
 ```
 
-Then launch `Screenshot Utility.bat`. Point the Blender field at `blender.exe` if it is not in the default install path.
+That installs the window toolkit and the image library. Launch `Screenshot Utility.bat` after that. If `blender.exe` is not in `C:\Program Files\Blender Foundation\Blender 4.5\`, set the path at the bottom of the window.
 
 ## Blender addon
 
