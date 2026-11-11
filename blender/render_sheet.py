@@ -266,8 +266,31 @@ def setup_world(scene, background):
     tree.links.new(mix.outputs["Shader"], out.inputs["Surface"])
 
 
+def use_eevee(scene):
+    """4.5 calls the engine EEVEE Next. 5.0 put the old name back."""
+    if bpy.app.version >= (5, 0, 0):
+        scene.render.engine = "BLENDER_EEVEE"
+    else:
+        scene.render.engine = "BLENDER_EEVEE_NEXT"
+
+
+def set_gtao(scene, enabled, distance=None):
+    eevee = scene.eevee
+    if hasattr(eevee, "use_gtao"):
+        eevee.use_gtao = enabled
+    if distance is None:
+        return
+    if hasattr(eevee, "gtao_distance"):
+        eevee.gtao_distance = distance
+        return
+    for layer in scene.view_layers:
+        settings = getattr(layer, "eevee", None)
+        if settings is not None and hasattr(settings, "ambient_occlusion_distance"):
+            settings.ambient_occlusion_distance = distance
+
+
 def setup_render(scene, frame_size, extent):
-    scene.render.engine = "BLENDER_EEVEE_NEXT"
+    use_eevee(scene)
     scene.render.resolution_x = frame_size
     scene.render.resolution_y = frame_size
     scene.render.resolution_percentage = 100
@@ -290,9 +313,9 @@ def setup_render(scene, frame_size, extent):
     scene.eevee.ray_tracing_options.use_denoise = True
     scene.eevee.shadow_ray_count = 4
     scene.eevee.shadow_step_count = 12
-    scene.eevee.use_gtao = True
-    scene.eevee.gtao_quality = 1.0
-    scene.eevee.gtao_distance = max(0.005, max(extent.x, extent.y, extent.z) * 0.06)
+    if hasattr(scene.eevee, "gtao_quality"):
+        scene.eevee.gtao_quality = 1.0
+    set_gtao(scene, True, max(0.005, max(extent.x, extent.y, extent.z) * 0.06))
 
 
 def look_at(obj, target):
@@ -434,7 +457,7 @@ def render_wire(
     lit = pass_name == "material"
     scene.view_settings.exposure = 0.15 if lit else 0.0
     scene.eevee.use_raytracing = lit
-    scene.eevee.use_gtao = lit
+    set_gtao(scene, lit)
     scene.eevee.use_shadows = lit
     scene.eevee.taa_render_samples = 32 if lit else 8
 
@@ -546,7 +569,7 @@ def main():
         # Other rows stay at the texture's real brightness. Material was reading too dark.
         scene.view_settings.exposure = 0.15 if lit else 0.0
         scene.eevee.use_raytracing = lit
-        scene.eevee.use_gtao = lit
+        set_gtao(scene, lit)
         scene.eevee.use_shadows = lit
         scene.eevee.taa_render_samples = 32 if lit else 16
         for index in range(frames):

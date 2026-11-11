@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.log)
 
         blender_row = QHBoxLayout()
-        blender_row.addWidget(QLabel("Blender 4.5"))
+        blender_row.addWidget(QLabel("Blender"))
         self.blender_edit = QLineEdit()
         self.blender_edit.setPlaceholderText(str(DEFAULT_BLENDER))
         blender_row.addWidget(self.blender_edit, 1)
@@ -1083,7 +1083,7 @@ class MainWindow(QMainWindow):
             return
         self._remember_output_dir(output)
         if not Path(self._blender_path()).is_file():
-            QMessageBox.warning(self, "Screenshot Utility", "Can't find blender.exe. Set the Blender 4.5 path at the bottom of the window.")
+            QMessageBox.warning(self, "Screenshot Utility", "Can't find blender.exe. Set the Blender path at the bottom of the window.")
             return
         materials = self._collect_materials()
         missing = []

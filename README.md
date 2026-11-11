@@ -1,6 +1,12 @@
 # FBX Screenshot Utility
 
-Desktop app for Windows. Drop an FBX in, assign textures to the existing material slots, and build a turnaround sheet. Blender 4.5 renders in the background. There is no live viewport.
+Desktop app for Windows. Drop an FBX in, assign textures to the existing material slots, and build a turnaround sheet. Blender renders in the background. There is no live viewport.
+
+## Requirements
+
+- Windows.
+- [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. `py -3.13` comes from that installer.
+- [Blender 4.5 or newer](https://www.blender.org/download/). 4.5 is the oldest version that works. Newer releases are fine. The sheet is rendered by Blender in the background.
 
 ![Screenshot Utility](docs/screenshot.png)
 
@@ -44,12 +50,7 @@ Turn Character Pipeline off to assign Roughness or Smoothness, Metallic, AO, and
 
 ## Run
 
-Windows. Two programs have to be installed first:
-
-- [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. The `py -3.13` command below comes from that installer.
-- [Blender 4.5](https://www.blender.org/download/releases/4-5/). The sheet is rendered by Blender in the background. There is no live viewport.
-
-Then, from this folder:
+From this folder:
 
 ```bat
 py -3.13 -m venv .venv
@@ -60,7 +61,7 @@ That installs the window toolkit and the image library. Launch `Screenshot Utili
 
 ## Blender addon
 
-`addons/screenshot_utility.zip` is a Blender 4.5 addon. In Blender: Edit → Preferences → Add-ons → Install from Disk, pick that zip, then enable **Screenshot Utility**.
+`addons/screenshot_utility.zip` is an addon for Blender 4.5 or newer. In Blender: Edit → Preferences → Add-ons → Install from Disk, pick that zip, then enable **Screenshot Utility**.
 
 The button is **Build Screen List**. It sits in the top right corner of the Blender window and has a monitor icon.
 
