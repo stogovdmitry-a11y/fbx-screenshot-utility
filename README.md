@@ -5,8 +5,10 @@ Desktop app for Windows. Drop an FBX in, assign textures to the existing materia
 ## Requirements
 
 - Windows.
-- [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. `py -3.13` comes from that installer.
 - [Blender 4.5 or newer](https://www.blender.org/download/). 4.5 is the oldest version that works. Newer releases are fine. The sheet is rendered by Blender in the background.
+- Python is only needed to run from source or to build the folder. The packaged build does not include it.
+- [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. `py -3.13` comes from that installer.
+- Libraries, unchanged: PySide6 and Pillow, from `requirements.txt`.
 
 ![Screenshot Utility](docs/screenshot.png)
 
@@ -16,12 +18,13 @@ Desktop app for Windows. Drop an FBX in, assign textures to the existing materia
 - An empty texture field keeps whatever is already stored in the FBX.
 - Builds one PNG sheet. Each row is a pass, each column is a camera angle.
 - The **Long side** value is the long side of the finished sheet, not of a single frame.
-- Camera: frame count, even step, start angle, distance scale, and height as a fraction of the model. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
+- Camera: frame count, start angle, distance scale, and height as a fraction of the model. The cameras are spaced evenly around a full turn. Two frames are front and side, 90° apart. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
 - Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass.
 - The lit Material row gets a soft disc under the feet, so the character reads as standing on something. It is not a shadow from the key light, and the flat texture rows do not get it.
 - Under each texture row name the sheet prints that map's resolution, for example `4096×4096`. Material and wireframe rows skip it. If several slots disagree, the sizes are listed side by side.
 - Background color is shared by the render and the sheet padding.
-- **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window. Last folders, texture assignments, and options are remembered.
+- **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window, scaled to fit that window. Last folders, texture assignments, and options are remembered.
+- The title bar shows the version. **GitHub**, next to the version at the bottom left, opens the repository.
 
 ## On the sheet
 
@@ -53,7 +56,7 @@ On by default. This is the packed character layout, not a set of separate roughn
 | Channel | Map |
 | --- | --- |
 | R | Roughness. Bright is rough. |
-| G | Emissive. |
+| G | Emissive, off unless Emission is checked. The mask is only the brightness. Color, strength, and bloom are set next to that checkbox, and bloom stays off while emission is off. |
 | B | Metallic. |
 | A | Translucency. |
 
@@ -75,6 +78,8 @@ py -3.13 -m venv .venv
 ```
 
 That installs the window toolkit and the image library. Launch `Screenshot Utility.bat` after that. If `blender.exe` is not in `C:\Program Files\Blender Foundation\Blender 4.5\`, set the path at the bottom of the window.
+
+`scripts\build_folder.bat` packs the utility into `dist\Screenshot Utility\`. Run `Screenshot Utility.exe` in that folder. Blender is not included.
 
 ## Blender addon
 

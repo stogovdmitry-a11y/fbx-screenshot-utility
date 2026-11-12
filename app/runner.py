@@ -4,7 +4,9 @@ import os
 import subprocess
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from app.paths import resource_root
+
+ROOT = resource_root()
 BLENDER_DIR = ROOT / "blender"
 DEFAULT_BLENDER = Path(r"C:\Program Files\Blender Foundation\Blender 4.5\blender.exe")
 INSPECT_SCRIPT = BLENDER_DIR / "inspect_fbx.py"

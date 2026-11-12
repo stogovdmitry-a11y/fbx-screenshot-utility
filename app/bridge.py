@@ -6,7 +6,9 @@ import os
 import time
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+from app.paths import install_root
+
+ROOT = install_root()
 HOME = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "ScreenshotUtility"
 INBOX = HOME / "inbox"
 EXPORTS = HOME / "exports"

@@ -5,7 +5,9 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
-BUNDLED_FONT = Path(__file__).resolve().parent.parent / "fonts" / "ExonRegular.otf"
+from app.paths import resource_root
+
+BUNDLED_FONT = resource_root() / "fonts" / "ExonRegular.otf"
 
 SHEET_BG = (60, 60, 60)
 

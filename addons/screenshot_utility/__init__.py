@@ -13,7 +13,7 @@ from bpy.props import StringProperty
 bl_info = {
     "name": "Screenshot Utility",
     "author": "Dmitry Stogov",
-    "version": (1, 0, 0),
+    "version": (1, 2, 0),
     "blender": (4, 5, 0),
     "location": "Top bar",
     "description": "Send the current meshes to Screenshot Utility and render a turnaround sheet",
@@ -186,10 +186,14 @@ def _ensure_utility():
     folder = _utility_folder(info)
     if folder is None:
         return False, "Open Screenshot Utility once, or set its folder in the addon preferences"
+    exe = folder / "Screenshot Utility.exe"
     bat = folder / "Screenshot Utility.bat"
-    if not bat.is_file():
-        return False, f"Can't find Screenshot Utility.bat in {folder}"
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    if exe.is_file():
+        subprocess.Popen([str(exe)], cwd=str(folder), creationflags=flags)
+        return True, ""
+    if not bat.is_file():
+        return False, f"Can't find Screenshot Utility in {folder}"
     subprocess.Popen(["cmd", "/c", "start", "", str(bat)], cwd=str(folder), creationflags=flags)
     return True, ""
 

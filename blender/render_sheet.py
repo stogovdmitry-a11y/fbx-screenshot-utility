@@ -160,14 +160,19 @@ def link_owlcat_masks(tree, bsdf, images):
     tree.links.new(node.outputs["Color"], separate.inputs["Color"])
     tree.links.new(separate.outputs["Red"], bsdf.inputs["Roughness"])
     tree.links.new(separate.outputs["Blue"], bsdf.inputs["Metallic"])
-    # These add light on top of the key. Full strength washes bright hair out.
-    glow = tree.nodes.new("ShaderNodeMath")
-    glow.operation = "MULTIPLY"
-    glow.location = (-520, 80)
-    glow.inputs[1].default_value = 0.2
-    tree.links.new(separate.outputs["Green"], glow.inputs[0])
-    tree.links.new(glow.outputs["Value"], bsdf.inputs["Emission Strength"])
-    tree.links.new(albedo_socket(tree, images, -1100, 280), bsdf.inputs["Emission Color"])
+    if images.get("emission"):
+        # G is only how bright the glow is. The color is chosen in the app.
+        channels = images.get("emission_color") or (255, 255, 255)
+        red, green, blue = (srgb_to_linear(float(channel) / 255.0) for channel in channels[:3])
+        bsdf.inputs["Emission Color"].default_value = (red, green, blue, 1.0)
+        glow = tree.nodes.new("ShaderNodeMath")
+        glow.operation = "MULTIPLY"
+        glow.location = (-520, 80)
+        glow.inputs[1].default_value = float(images.get("emission_strength", 1.0))
+        tree.links.new(separate.outputs["Green"], glow.inputs[0])
+        tree.links.new(glow.outputs["Value"], bsdf.inputs["Emission Strength"])
+    else:
+        bsdf.inputs["Emission Strength"].default_value = 0.0
     if masks.depth >= 32:
         wrap = tree.nodes.new("ShaderNodeMath")
         wrap.operation = "MULTIPLY"
@@ -398,6 +403,51 @@ def setup_render(scene, frame_size, extent):
     set_gtao(scene, True, max(0.005, max(extent.x, extent.y, extent.z) * 0.28))
 
 
+def setup_bloom(scene, strength):
+    """A small halo around emission. Flat rows leave compositing off."""
+    scene.use_nodes = True
+    scene.render.use_compositing = False
+    # The Emit socket only exists once the pass is on, and only on a node made after that.
+    for layer in scene.view_layers:
+        layer.use_pass_emit = True
+    tree = scene.node_tree
+    tree.nodes.clear()
+    layers = tree.nodes.new("CompositorNodeRLayers")
+    layers.location = (-720, 0)
+    glare = tree.nodes.new("CompositorNodeGlare")
+    glare.glare_type = "BLOOM"
+    glare.quality = "HIGH"
+    glare.location = (-440, -200)
+    glare.inputs["Threshold"].default_value = 0.15
+    glare.inputs["Strength"].default_value = max(0.0, float(strength))
+    glare.inputs["Size"].default_value = 0.35
+    glare.inputs["Smoothness"].default_value = 0.2
+    tree.links.new(layers.outputs["Emit"], glare.inputs["Image"])
+    add = tree.nodes.new("CompositorNodeMixRGB")
+    add.blend_type = "ADD"
+    add.use_clamp = False
+    add.location = (-140, 40)
+    add.inputs["Fac"].default_value = 1.0
+    tree.links.new(layers.outputs["Image"], add.inputs[1])
+    tree.links.new(glare.outputs["Glare"], add.inputs[2])
+    # The sheet keeps a pixel only where alpha is set, so the halo has to carry its own.
+    glow = tree.nodes.new("CompositorNodeRGBToBW")
+    glow.location = (-140, -220)
+    tree.links.new(glare.outputs["Glare"], glow.inputs["Image"])
+    cover = tree.nodes.new("CompositorNodeMath")
+    cover.operation = "MAXIMUM"
+    cover.location = (80, -180)
+    tree.links.new(layers.outputs["Alpha"], cover.inputs[0])
+    tree.links.new(glow.outputs["Val"], cover.inputs[1])
+    shaped = tree.nodes.new("CompositorNodeSetAlpha")
+    shaped.location = (280, 40)
+    tree.links.new(add.outputs["Image"], shaped.inputs["Image"])
+    tree.links.new(cover.outputs["Value"], shaped.inputs["Alpha"])
+    out = tree.nodes.new("CompositorNodeComposite")
+    out.location = (520, 40)
+    tree.links.new(shaped.outputs["Image"], out.inputs["Image"])
+
+
 def look_at(obj, target):
     direction = target - obj.location
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
@@ -609,6 +659,9 @@ def resolve_materials(job, snapshots):
             "invert_g": invert_g,
             "surface_model": "roughness" if job.get("surface_model") == "roughness" else "smoothness",
             "pipeline": "owlcat" if job.get("character", job.get("owlcat", True)) else "generic",
+            "emission_color": job.get("emission") or [255, 255, 255],
+            "emission_strength": float(job.get("emission_strength", 1.0)),
+            "emission": bool(job.get("emission_enabled")),
         }
     return resolved
 
@@ -651,6 +704,7 @@ def render_wire(
     raytracing=True,
     cycles=False,
     exposure=0.15,
+    bloom=1.0,
     ground=None,
 ):
     """Edges sit on the shaded mesh. The mesh itself hides whatever is behind it."""
@@ -669,6 +723,7 @@ def render_wire(
     if ground is not None:
         ground.hide_render = not lit
     scene.view_settings.exposure = exposure if lit else 0.0
+    scene.render.use_compositing = lit and bloom > 0
     prepare_engine(scene, lit, raytracing, cycles)
     scene.eevee.taa_render_samples = 32 if lit else 8
 
@@ -743,6 +798,8 @@ def main():
 
     scene = bpy.context.scene
     setup_render(scene, int(job["frame_size"]), extent)
+    bloom = float(job.get("bloom", 1.0)) if job.get("emission_enabled") else 0.0
+    setup_bloom(scene, bloom)
     setup_world(scene, job.get("background"))
 
     camera_data = bpy.data.cameras.new("SheetCamera")
@@ -798,6 +855,7 @@ def main():
         ground.hide_render = not lit
         # Other rows stay at the texture's real brightness. Material was reading too dark.
         scene.view_settings.exposure = float(job.get("exposure", 0.15)) if lit else 0.0
+        scene.render.use_compositing = lit and bloom > 0
         prepare_engine(scene, lit, raytracing, cycles)
         scene.eevee.taa_render_samples = 32 if lit else 16
         for index in range(frames):
@@ -843,6 +901,7 @@ def main():
             raytracing,
             cycles,
             float(job.get("exposure", 0.15)),
+            bloom,
             ground,
         )
     print("RESULT ok", flush=True)

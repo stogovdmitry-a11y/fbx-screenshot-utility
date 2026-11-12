@@ -16,6 +16,7 @@ from PySide6.QtGui import (
     QDragEnterEvent,
     QDropEvent,
     QImageReader,
+    QIcon,
     QKeySequence,
     QPalette,
     QPixmap,
@@ -38,6 +39,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QSplitter,
     QVBoxLayout,
@@ -46,8 +48,10 @@ from PySide6.QtWidgets import (
 
 from PIL import Image, UnidentifiedImageError
 
+from app import VERSION
 from app.bridge import publish, take_request, unpublish
 from app.composite import PASS_LABELS, build_sheet, frame_size_for_long_side
+from app.paths import resource_root
 from app.runner import DEFAULT_BLENDER, BlenderError, inspect_fbx, render_sheet
 
 CHANNELS = (
@@ -180,13 +184,19 @@ class JobThread(QThread):
             self.succeeded.emit(result)
 
 
-def _pixmap_fitted(path, width):
-    """Decode only as wide as the window. Qt otherwise refuses sheets over 256 MB."""
+def _pixmap_fitted(path, width, height=0):
+    """Decode only as large as the view. Qt otherwise refuses sheets over 256 MB."""
     reader = QImageReader(str(path))
     size = reader.size()
-    if size.isValid() and size.width() > width > 0:
-        height = max(1, round(size.height() * width / size.width()))
-        reader.setScaledSize(QSize(width, height))
+    if size.isValid() and size.width() > 0 and size.height() > 0 and width > 0:
+        if height > 0:
+            scale = min(width / size.width(), height / size.height())
+            width = max(1, round(size.width() * scale))
+            height = max(1, round(size.height() * scale))
+            reader.setScaledSize(QSize(width, height))
+        elif size.width() > width:
+            height = max(1, round(size.height() * width / size.width()))
+            reader.setScaledSize(QSize(width, height))
     image = reader.read()
     if image.isNull():
         return QPixmap(), reader.errorString()
@@ -201,9 +211,13 @@ class SheetWindow(QWidget):
         self._path = ""
         self.label = QLabel()
         self.label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.label.setMinimumSize(0, 0)
+        self.label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.label.setStyleSheet("background: #2a2a2a;")
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setWidget(self.label)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -225,21 +239,25 @@ class SheetWindow(QWidget):
     def _fit(self):
         if not self._path or not Path(self._path).is_file():
             return
-        view = self.scroll.viewport().width()
-        width = view if view > 50 else self.contentsRect().width()
-        width = max(1, width)
-        pixmap, error = _pixmap_fitted(self._path, width)
+        view = self.scroll.viewport()
+        width = view.width()
+        height = view.height()
+        if width <= 50 or height <= 50:
+            rect = self.contentsRect()
+            width, height = rect.width(), rect.height()
+        pixmap, error = _pixmap_fitted(self._path, max(1, width), max(1, height))
         if pixmap.isNull():
             self.label.setText(f"Saved, but the preview failed to open:\n{error}")
             return
         self.label.setPixmap(pixmap)
+        self.label.setMinimumSize(0, 0)
 
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Screenshot Utility")
-        self.resize(1180, 820)
+        self.setWindowTitle(f"Screenshot Utility {VERSION}")
+        self.resize(880, 820)
         self.setAcceptDrops(True)
         self._settings = QSettings("ScreenshotUtility", "ScreenshotUtility")
         self._thread = None
@@ -269,12 +287,18 @@ class MainWindow(QMainWindow):
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self._build_materials())
         splitter.addWidget(self._build_settings())
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setCollapsible(0, False)
+        splitter.setCollapsible(1, False)
+        self._splitter = splitter
+        self._settings_halved = False
         layout.addWidget(splitter, 2)
 
         self.preview = QLabel("The sheet will show up here")
         self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview.setMinimumSize(0, 0)
+        self.preview.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
         self.preview.setMinimumHeight(220)
         self.preview.setStyleSheet("background: #2a2a2a;")
         preview_scroll = QScrollArea()
@@ -298,6 +322,21 @@ class MainWindow(QMainWindow):
         browse_blender.clicked.connect(self._browse_blender)
         blender_row.addWidget(browse_blender)
         layout.addLayout(blender_row)
+
+        foot = QHBoxLayout()
+        version = QLabel(VERSION)
+        version.setStyleSheet("color: #8a8a8a;")
+        foot.addWidget(version)
+        repo = QPushButton("GitHub")
+        repo.setToolTip("Open the GitHub repository")
+        repo.clicked.connect(
+            lambda: QDesktopServices.openUrl(
+                QUrl("https://github.com/stogovdmitry-a11y/fbx-screenshot-utility")
+            )
+        )
+        foot.addWidget(repo)
+        foot.addStretch(1)
+        layout.addLayout(foot)
 
     def _build_materials(self):
         panel = QWidget()
@@ -367,14 +406,8 @@ class MainWindow(QMainWindow):
         self.frames = QSpinBox()
         self.frames.setRange(1, 36)
         self.frames.setValue(6)
+        self.frames.setToolTip("Cameras are spaced evenly around the model. Two frames are front and side.")
         form.addRow("Frames", self.frames)
-
-        self.step = QDoubleSpinBox()
-        self.step.setRange(0, 360)
-        self.step.setDecimals(1)
-        self.step.setValue(60)
-        self.step.setSuffix("°")
-        form.addRow("Step", self.step)
 
         self.start = QDoubleSpinBox()
         self.start.setRange(-360, 360)
@@ -471,6 +504,42 @@ class MainWindow(QMainWindow):
         flags.addLayout(bg_row)
         self._paint_bg_button()
 
+        self._emit_color = QColor("#ffffff")
+        self.emit_color_btn = QPushButton()
+        self.emit_color_btn.setFixedSize(36, 22)
+        self.emit_color_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.emit_color_btn.setToolTip("Color of the glow. The mask's green channel is only the brightness.")
+        self.emit_color_btn.clicked.connect(self._pick_emit_color)
+        self.emit_strength = QDoubleSpinBox()
+        self.emit_strength.setRange(0, 50)
+        self.emit_strength.setSingleStep(0.25)
+        self.emit_strength.setDecimals(2)
+        self.emit_strength.setValue(1)
+        self.emit_strength.setToolTip("Multiplier on the mask's green channel.")
+        self._fit_number(self.emit_strength)
+        emit_row = QHBoxLayout()
+        emit_row.setSpacing(14)
+        self.emission_enabled = QCheckBox("Emission")
+        self.emission_enabled.setToolTip("Uses the mask's green channel as brightness. Off by default.")
+        self.emission_enabled.toggled.connect(self._toggle_emission)
+        emit_row.addWidget(self.emission_enabled)
+        emit_row.addWidget(self.emit_color_btn)
+        emit_row.addWidget(self.emit_strength)
+        self.bloom = QDoubleSpinBox()
+        self.bloom.setRange(0, 8)
+        self.bloom.setSingleStep(0.1)
+        self.bloom.setDecimals(2)
+        self.bloom.setValue(1)
+        self.bloom.setToolTip("Halo around the emission on the Material row. 0 turns it off.")
+        self._fit_number(self.bloom)
+        bloom_label = QLabel("Bloom")
+        bloom_label.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        emit_row.addWidget(bloom_label)
+        emit_row.addWidget(self.bloom)
+        emit_row.addStretch(1)
+        self._paint_emit_button()
+        self._toggle_emission(False)
+
         self.surface_model = QComboBox()
         self.surface_model.addItem("Smoothness", "smoothness")
         self.surface_model.addItem("Roughness", "roughness")
@@ -525,6 +594,7 @@ class MainWindow(QMainWindow):
         side.addWidget(grid_box, 0, Qt.AlignmentFlag.AlignTop)
         side.addStretch(1)
         column.addLayout(side)
+        column.addLayout(emit_row)
 
         self.date_in_name = QCheckBox("Date in the file name")
         self.date_in_name.toggled.connect(self._refresh_output_name)
@@ -606,13 +676,14 @@ class MainWindow(QMainWindow):
         self.status.setWordWrap(True)
         column.addWidget(self.status)
         column.addStretch(1)
+        panel.setMinimumWidth(420)
+        panel.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         return panel
 
     def _restore(self):
         blender = self._settings.value("blender", str(DEFAULT_BLENDER))
         self.blender_edit.setText(str(blender))
         self.frames.setValue(int(self._settings.value("frames", 6)))
-        self.step.setValue(float(self._settings.value("step", 60)))
         self.start.setValue(float(self._settings.value("start", 0)))
         self.distance.setValue(float(self._settings.value("distance", 1)))
         self.height.setValue(float(self._settings.value("height", 0)))
@@ -637,6 +708,14 @@ class MainWindow(QMainWindow):
         if not self._bg_color.isValid():
             self._bg_color = QColor("#3c3c3c")
         self._paint_bg_button()
+        saved_emit = self._settings.value("emission_color", "#ffffff") or "#ffffff"
+        self._emit_color = QColor(str(saved_emit))
+        if not self._emit_color.isValid():
+            self._emit_color = QColor("#ffffff")
+        self._paint_emit_button()
+        self.emit_strength.setValue(float(self._settings.value("emission_strength", 1)))
+        self.bloom.setValue(float(self._settings.value("bloom", 1)))
+        self.emission_enabled.setChecked(self._settings.value("emission_enabled", False) in (True, "true", "1"))
         surface = self._settings.value("surface_model", "smoothness") or "smoothness"
         if surface == "specular":
             surface = "smoothness"
@@ -690,7 +769,6 @@ class MainWindow(QMainWindow):
     def _save_settings(self):
         self._settings.setValue("blender", self.blender_edit.text().strip())
         self._settings.setValue("frames", self.frames.value())
-        self._settings.setValue("step", self.step.value())
         self._settings.setValue("start", self.start.value())
         self._settings.setValue("distance", self.distance.value())
         self._settings.setValue("height", self.height.value())
@@ -703,6 +781,10 @@ class MainWindow(QMainWindow):
         self._settings.setValue("cycles", self.cycles.isChecked())
         self._settings.setValue("character", self.character.isChecked())
         self._settings.setValue("bg_color", self._bg_color.name())
+        self._settings.setValue("emission_color", self._emit_color.name())
+        self._settings.setValue("emission_strength", self.emit_strength.value())
+        self._settings.setValue("emission_enabled", self.emission_enabled.isChecked())
+        self._settings.setValue("bloom", self.bloom.value())
         self._settings.setValue("surface_model", self.surface_model.currentData())
         self._settings.setValue("passes", [key for key, box in self.pass_boxes.items() if box.isChecked()])
         self._settings.setValue("caption_name", self.caption_name.text())
@@ -1111,6 +1193,7 @@ class MainWindow(QMainWindow):
             box.setVisible(self._pass_enabled(key))
         self.surface_model.setVisible(not owl)
         self._surface_caption.setVisible(not owl)
+        self._toggle_emission(self.emission_enabled.isChecked())
         self._refill_grid_passes()
 
     def _refill_grid_passes(self):
@@ -1306,12 +1389,36 @@ class MainWindow(QMainWindow):
         self.grid_thickness.setEnabled(enabled)
         self.wire_color_btn.setEnabled(enabled)
 
+    def _fit_number(self, spin):
+        text = spin.textFromValue(spin.maximum())
+        spin.setFixedWidth(spin.fontMetrics().horizontalAdvance(text) + 32)
+        spin.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
     def _toggle_cycles(self, enabled):
         self.raytracing.setEnabled(not enabled)
 
+    def _toggle_emission(self, enabled):
+        live = bool(enabled) and self.character.isChecked()
+        self.emission_enabled.setEnabled(self.character.isChecked())
+        self.emit_color_btn.setEnabled(live)
+        self.emit_strength.setEnabled(live)
+        self.bloom.setEnabled(live)
+
+    def _swatch_style(self, color):
+        ink = "#111" if color.lightness() > 140 else "#eee"
+        # A squeezed button otherwise grows scrollbars beside the hex text.
+        return (
+            "QPushButton {"
+            f"background: {color.name()}; color: {ink};"
+            "border: 1px solid #5a5a5a; padding: 1px 4px;"
+            "}"
+            "QScrollBar:vertical { width: 0px; }"
+            "QScrollBar:horizontal { height: 0px; }"
+        )
+
     def _paint_wire_button(self):
         color = self._wire_color.name()
-        self.wire_color_btn.setStyleSheet(f"background: {color}; color: {'#111' if self._wire_color.lightness() > 140 else '#eee'};")
+        self.wire_color_btn.setStyleSheet(self._swatch_style(self._wire_color))
         self.wire_color_btn.setText(color)
 
     def _pick_wire_color(self):
@@ -1320,11 +1427,21 @@ class MainWindow(QMainWindow):
             self._wire_color = chosen
             self._paint_wire_button()
 
+    def _paint_emit_button(self):
+        color = self._emit_color.name()
+        self.emit_color_btn.setStyleSheet(self._swatch_style(self._emit_color))
+        self.emit_color_btn.setText("")
+        self.emit_color_btn.setToolTip(f"{color}. The mask's green channel is only the brightness.")
+
+    def _pick_emit_color(self):
+        chosen = QColorDialog.getColor(self._emit_color, self, "Emission color")
+        if chosen.isValid():
+            self._emit_color = chosen
+            self._paint_emit_button()
+
     def _paint_bg_button(self):
         color = self._bg_color.name()
-        self.bg_color_btn.setStyleSheet(
-            f"background: {color}; color: {'#111' if self._bg_color.lightness() > 140 else '#eee'};"
-        )
+        self.bg_color_btn.setStyleSheet(self._swatch_style(self._bg_color))
         self.bg_color_btn.setText(color)
 
     def _pick_bg_color(self):
@@ -1349,6 +1466,12 @@ class MainWindow(QMainWindow):
             keys.remove("material")
             keys.insert(0, "material")
         return keys
+
+    def _step_degrees(self):
+        frames = max(1, self.frames.value())
+        if frames == 2:
+            return 90.0
+        return 360.0 / frames
 
     def render(self):
         fbx = self.fbx_edit.text().strip()
@@ -1419,7 +1542,7 @@ class MainWindow(QMainWindow):
         job_body = {
             "fbx": fbx,
             "frames": self.frames.value(),
-            "step_degrees": self.step.value(),
+            "step_degrees": self._step_degrees(),
             "start_degrees": self.start.value(),
             "distance_scale": self.distance.value(),
             "height": self.height.value(),
@@ -1432,6 +1555,10 @@ class MainWindow(QMainWindow):
             "cycles": self.cycles.isChecked(),
             "character": self.character.isChecked(),
             "background": [self._bg_color.red(), self._bg_color.green(), self._bg_color.blue()],
+            "emission": [self._emit_color.red(), self._emit_color.green(), self._emit_color.blue()],
+            "emission_enabled": self.emission_enabled.isChecked(),
+            "emission_strength": self.emit_strength.value(),
+            "bloom": self.bloom.value(),
             "surface_model": self.surface_model.currentData(),
             "pass_labels": labels,
             "passes": render_passes,
@@ -1505,12 +1632,35 @@ class MainWindow(QMainWindow):
             return
         if not self._preview_path or not Path(self._preview_path).is_file():
             return
-        width = max(1, self.preview_scroll.viewport().width() - 8)
-        pixmap, error = _pixmap_fitted(self._preview_path, width)
+        view = self.preview_scroll.viewport()
+        pixmap, error = _pixmap_fitted(
+            self._preview_path,
+            max(1, view.width() - 8),
+            max(1, view.height() - 8),
+        )
         if pixmap.isNull():
             self.preview.setText(f"Saved, but the preview failed to open:\n{error}")
             return
         self.preview.setPixmap(pixmap)
+        self.preview.setMinimumSize(0, 0)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if not self._settings_halved:
+            self._settings_halved = True
+            QTimer.singleShot(0, self._halve_settings)
+
+    def _halve_settings(self):
+        sizes = self._splitter.sizes()
+        total = sum(sizes)
+        if total <= 0 or sizes[1] <= 0:
+            self._settings_halved = False
+            return
+        right_floor = 420
+        left = min(400, max(280, total - right_floor))
+        self._splitter.setSizes([left, total - left])
+        self._splitter.setStretchFactor(0, 1)
+        self._splitter.setStretchFactor(1, 0)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -1530,6 +1680,8 @@ def main():
     app = QApplication([])
     app.setApplicationName("Screenshot Utility")
     app.setApplicationDisplayName("Screenshot Utility")
+    icon = QIcon(str(resource_root() / "icons" / "app.png"))
+    app.setWindowIcon(icon)
     apply_dark(app)
     window = MainWindow()
     window.show()
