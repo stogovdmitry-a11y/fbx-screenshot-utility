@@ -274,15 +274,94 @@ def use_eevee(scene):
         scene.render.engine = "BLENDER_EEVEE_NEXT"
 
 
+_cycles_ready = False
+
+
+def _cycles_gpu():
+    """OptiX, then CUDA, then the other GPU backends. None keeps Cycles on the CPU."""
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    for device_type in ("OPTIX", "CUDA", "HIP", "ONEAPI", "METAL"):
+        try:
+            prefs.compute_device_type = device_type
+        except (TypeError, ValueError):
+            continue
+        if prefs.compute_device_type != device_type:
+            continue
+        prefs.get_devices()
+        found = False
+        for device in prefs.devices:
+            device.use = device.type == device_type
+            found = found or device.use
+        if found:
+            return device_type
+    return None
+
+
+def use_cycles(scene):
+    """Real path tracing for the lit row. Later frames reuse the same device and samples."""
+    global _cycles_ready
+    scene.render.engine = "CYCLES"
+    scene.render.use_persistent_data = True
+    if _cycles_ready:
+        return
+    cycles = scene.cycles
+    device_type = _cycles_gpu()
+    cycles.device = "GPU" if device_type else "CPU"
+    cycles.samples = 128
+    cycles.use_adaptive_sampling = True
+    cycles.adaptive_threshold = 0.01
+    cycles.use_denoising = True
+    if hasattr(cycles, "denoising_use_gpu"):
+        cycles.denoising_use_gpu = cycles.device == "GPU"
+    for layer in scene.view_layers:
+        layer.cycles.use_denoising = True
+    _cycles_ready = True
+    where = device_type or "CPU"
+    print(f"CYCLES {where} 128", flush=True)
+
+
+def prepare_engine(scene, lit, raytracing, cycles):
+    """Data rows stay on EEVEE. Cycles is only worth it once the pass is actually lit."""
+    if lit and cycles:
+        use_cycles(scene)
+        return
+    use_eevee(scene)
+    scene.eevee.use_raytracing = lit and raytracing
+    set_gtao(scene, lit and raytracing)
+    scene.eevee.use_shadows = lit
+
+
 def set_gtao(scene, enabled, distance=None):
+    """Crevice darkening on the lit pass.
+
+    use_gtao only feeds the AO render pass. On the beauty image, EEVEE gets
+    this from Fast GI, and only while raytracing is on. Its default mode is
+    global illumination, which bounces light back into the gaps.
+    """
     eevee = scene.eevee
     if hasattr(eevee, "use_gtao"):
         eevee.use_gtao = enabled
+    if hasattr(eevee, "use_fast_gi"):
+        eevee.use_fast_gi = enabled
+        if enabled and hasattr(eevee, "fast_gi_method"):
+            eevee.fast_gi_method = "AMBIENT_OCCLUSION_ONLY"
     if distance is None:
         return
     if hasattr(eevee, "gtao_distance"):
         eevee.gtao_distance = distance
-        return
+    if hasattr(eevee, "gtao_quality"):
+        eevee.gtao_quality = 1.0
+    if hasattr(eevee, "fast_gi_distance"):
+        eevee.fast_gi_distance = distance
+        eevee.fast_gi_quality = 0.8
+        eevee.fast_gi_ray_count = 4
+        eevee.fast_gi_step_count = 16
+        eevee.fast_gi_resolution = "2"
+        eevee.fast_gi_thickness_near = max(0.001, distance * 0.08)
+        eevee.fast_gi_bias = 0.02
+    # Rougher than this takes the AO path. Glossier surfaces still screen-trace.
+    if hasattr(eevee, "ray_tracing_options"):
+        eevee.ray_tracing_options.trace_max_roughness = 0.3
     for layer in scene.view_layers:
         settings = getattr(layer, "eevee", None)
         if settings is not None and hasattr(settings, "ambient_occlusion_distance"):
@@ -313,14 +392,94 @@ def setup_render(scene, frame_size, extent):
     scene.eevee.ray_tracing_options.use_denoise = True
     scene.eevee.shadow_ray_count = 4
     scene.eevee.shadow_step_count = 12
-    if hasattr(scene.eevee, "gtao_quality"):
-        scene.eevee.gtao_quality = 1.0
-    set_gtao(scene, True, max(0.005, max(extent.x, extent.y, extent.z) * 0.06))
+    if hasattr(scene.eevee, "shadow_pool_size"):
+        scene.eevee.shadow_pool_size = "1024"
+    # Long enough to reach between limbs, not just pores.
+    set_gtao(scene, True, max(0.005, max(extent.x, extent.y, extent.z) * 0.28))
 
 
 def look_at(obj, target):
     direction = target - obj.location
     obj.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
+
+
+def add_contact_shadow(center, extent, minimum):
+    """A soft dark disc under the feet. Only the lit row shows it."""
+    span_x = max(extent.x, 0.001)
+    span_y = max(extent.y, 0.001)
+    hx = span_x * 0.46
+    hy = span_y * 0.46
+    z = minimum.z - max(span_x, span_y) * 0.004
+    mesh = bpy.data.meshes.new("ContactShadow")
+    mesh.from_pydata(
+        [(-hx, -hy, 0.0), (hx, -hy, 0.0), (hx, hy, 0.0), (-hx, hy, 0.0)],
+        [],
+        [(0, 1, 2, 3)],
+    )
+    mesh.update()
+    obj = bpy.data.objects.new("ContactShadow", mesh)
+    obj.location = (center.x, center.y, z)
+    bpy.context.scene.collection.objects.link(obj)
+    if hasattr(obj, "visible_shadow"):
+        obj.visible_shadow = False
+    mat = bpy.data.materials.new("ContactShadow")
+    mat.use_nodes = True
+    mat.blend_method = "BLEND"
+    mat.surface_render_method = "BLENDED"
+    mat.use_backface_culling = True
+    tree = reset_tree(mat)
+    coord = tree.nodes.new("ShaderNodeTexCoord")
+    coord.location = (-900, 0)
+    center_at = tree.nodes.new("ShaderNodeVectorMath")
+    center_at.operation = "SUBTRACT"
+    center_at.location = (-700, 0)
+    center_at.inputs[1].default_value = (0.5, 0.5, 0.5)
+    tree.links.new(coord.outputs["Generated"], center_at.inputs[0])
+    length = tree.nodes.new("ShaderNodeVectorMath")
+    length.operation = "LENGTH"
+    length.location = (-500, 0)
+    tree.links.new(center_at.outputs["Vector"], length.inputs[0])
+    # 0 at the middle, 1 before the quad edge, so the disc has no square rim.
+    reach = tree.nodes.new("ShaderNodeMath")
+    reach.operation = "DIVIDE"
+    reach.location = (-320, 0)
+    reach.inputs[1].default_value = 0.36
+    tree.links.new(length.outputs["Value"], reach.inputs[0])
+    invert = tree.nodes.new("ShaderNodeMath")
+    invert.operation = "SUBTRACT"
+    invert.location = (-140, 80)
+    invert.inputs[0].default_value = 1.0
+    tree.links.new(reach.outputs["Value"], invert.inputs[1])
+    clamped = tree.nodes.new("ShaderNodeMath")
+    clamped.operation = "MAXIMUM"
+    clamped.location = (40, 80)
+    clamped.inputs[1].default_value = 0.0
+    tree.links.new(invert.outputs["Value"], clamped.inputs[0])
+    falloff = tree.nodes.new("ShaderNodeMath")
+    falloff.operation = "POWER"
+    falloff.location = (220, 80)
+    falloff.inputs[1].default_value = 1.8
+    tree.links.new(clamped.outputs["Value"], falloff.inputs[0])
+    strength = tree.nodes.new("ShaderNodeMath")
+    strength.operation = "MULTIPLY"
+    strength.location = (400, 80)
+    strength.inputs[1].default_value = 0.38
+    tree.links.new(falloff.outputs["Value"], strength.inputs[0])
+    transparent = tree.nodes.new("ShaderNodeBsdfTransparent")
+    transparent.location = (400, -80)
+    dark = tree.nodes.new("ShaderNodeEmission")
+    dark.location = (400, -220)
+    dark.inputs["Color"].default_value = (0.0, 0.0, 0.0, 1.0)
+    dark.inputs["Strength"].default_value = 1.0
+    mix = tree.nodes.new("ShaderNodeMixShader")
+    mix.location = (640, 0)
+    tree.links.new(strength.outputs["Value"], mix.inputs["Fac"])
+    tree.links.new(transparent.outputs["BSDF"], mix.inputs[1])
+    tree.links.new(dark.outputs["Emission"], mix.inputs[2])
+    output_node(tree, mix.outputs["Shader"], None)
+    obj.data.materials.append(mat)
+    obj.hide_render = True
+    return obj
 
 
 def add_area(name):
@@ -344,8 +503,56 @@ def fit_distance(extent, camera, distance_scale):
     return (radius / math.tan(fov * 0.5)) * distance_scale
 
 
-def place_rig(camera, lights, center, extent, distance, direction, height_frac):
-    camera.location = center + direction * distance + Vector((0.0, 0.0, height_frac * extent.z))
+def elevated_direction(direction, horizontal, height_frac, _extent):
+    """Height is a pitch. 1.0 looks down at 45°, whatever the model's proportions."""
+    view = direction * horizontal + Vector((0.0, 0.0, horizontal * height_frac))
+    if view.length < 1e-8:
+        return direction
+    return view.normalized()
+
+
+def framing_distance(camera, extent, view_dir):
+    """How far back the camera must sit so the whole bounds stay inside the frame."""
+    view_dir = view_dir.normalized()
+    world_up = Vector((0.0, 0.0, 1.0))
+    if abs(view_dir.dot(world_up)) > 0.99:
+        world_up = Vector((0.0, 1.0, 0.0))
+    right = world_up.cross(view_dir).normalized()
+    up = view_dir.cross(right).normalized()
+    half_x = math.tan(camera.data.angle_x * 0.5)
+    half_y = math.tan(camera.data.angle_y * 0.5)
+    needed = 0.001
+    for sx in (-0.5, 0.5):
+        for sy in (-0.5, 0.5):
+            for sz in (-0.5, 0.5):
+                offset = Vector((extent.x * sx, extent.y * sy, extent.z * sz))
+                depth = offset.dot(view_dir)
+                needed = max(
+                    needed,
+                    abs(offset.dot(right)) / half_x + depth,
+                    abs(offset.dot(up)) / half_y + depth,
+                )
+    return needed * 1.16
+
+
+def orbit_radius(camera, extent, front, frames, start, step, height_frac, distance_scale):
+    """One distance for the whole turnaround, far enough for the worst angle.
+
+    Height changes the aim. Distance still multiplies how far back the camera sits,
+    so the whole bounds stay in frame instead of only the level-view sphere.
+    """
+    horizontal = fit_distance(extent, camera, distance_scale)
+    worst = 0.001
+    for index in range(max(1, frames)):
+        direction = orbit_direction(front, start + index * step)
+        view_dir = elevated_direction(direction, horizontal, height_frac, extent)
+        worst = max(worst, framing_distance(camera, extent, view_dir))
+    return worst * distance_scale, horizontal
+
+
+def place_rig(camera, lights, center, extent, distance, direction, height_frac, horizontal):
+    view_dir = elevated_direction(direction, horizontal, height_frac, extent)
+    camera.location = center + view_dir * distance
     look_at(camera, center)
     forward = (center - camera.location).normalized()
     right = forward.cross(Vector((0.0, 0.0, 1.0)))
@@ -355,32 +562,29 @@ def place_rig(camera, lights, center, extent, distance, direction, height_frac):
         right.normalize()
     up = right.cross(forward).normalized()
 
-    key, fill, wrap, rim = lights
+    key, wrap, rim = lights
     span = max(extent.x, extent.y, extent.z, 0.001)
-    # Big softbox in front, a little above and to the side. Not overhead.
+    # Key in front, a little above and to the side. Big enough to stay soft, small enough to shadow.
     key.location = center - forward * distance * 0.62 + up * span * 0.55 - right * span * 0.75
-    fill.location = center - forward * distance * 0.5 + right * span * 1.15 - up * span * 0.15
     wrap.location = center - forward * distance * 0.4 - up * span * 0.7
     rim.location = center + forward * distance * 0.4 + up * span * 0.9
     for obj in lights:
         look_at(obj, center)
 
     falloff = distance * distance
-    key.data.energy = 10.0 * falloff
-    fill.data.energy = 4.0 * falloff
-    wrap.data.energy = 2.0 * falloff
-    rim.data.energy = 1.5 * falloff
+    # Energies track the disk area, so a smaller key stays the same brightness
+    # and can actually cast a limb shadow.
+    key.data.energy = 2.6 * falloff
+    wrap.data.energy = 0.55 * falloff
+    rim.data.energy = 0.8 * falloff
     key.data.color = (1.0, 0.97, 0.94)
-    fill.data.color = (0.9, 0.93, 1.0)
     wrap.data.color = (1.0, 0.98, 0.96)
-    key.data.size = span * 2.4
+    key.data.size = span * 1.15
     key.data.use_shadow = True
-    fill.data.size = span * 4.0
-    fill.data.use_shadow = False
-    wrap.data.size = span * 4.0
-    wrap.data.use_shadow = False
-    rim.data.size = span * 1.6
-    rim.data.use_shadow = False
+    wrap.data.size = span * 2.2
+    wrap.data.use_shadow = True
+    rim.data.size = span * 1.05
+    rim.data.use_shadow = True
     camera.data.clip_start = max(distance / 200.0, 0.001)
     camera.data.clip_end = distance * 50.0
 
@@ -411,7 +615,9 @@ def resolve_materials(job, snapshots):
 
 def apply_pass(pass_name, resolved):
     for mat in sheetlib.materials_in_order():
-        images = resolved[mat.name]
+        images = resolved.get(mat.name)
+        if images is None:
+            continue
         if pass_name == "basecolor":
             build_basecolor(mat, images)
         elif pass_name in DATA_PASSES:
@@ -430,6 +636,7 @@ def render_wire(
     center,
     extent,
     distance,
+    horizontal,
     front,
     frames,
     start_degrees,
@@ -441,6 +648,10 @@ def render_wire(
     out_dir,
     done,
     total,
+    raytracing=True,
+    cycles=False,
+    exposure=0.15,
+    ground=None,
 ):
     """Edges sit on the shaded mesh. The mesh itself hides whatever is behind it."""
     apply_pass(pass_name, resolved)
@@ -455,10 +666,10 @@ def render_wire(
     except TypeError:
         scene.view_settings.view_transform = "Standard"
     lit = pass_name == "material"
-    scene.view_settings.exposure = 0.15 if lit else 0.0
-    scene.eevee.use_raytracing = lit
-    set_gtao(scene, lit)
-    scene.eevee.use_shadows = lit
+    if ground is not None:
+        ground.hide_render = not lit
+    scene.view_settings.exposure = exposure if lit else 0.0
+    prepare_engine(scene, lit, raytracing, cycles)
     scene.eevee.taa_render_samples = 32 if lit else 8
 
     world_per_pixel = (2.0 * distance * math.tan(camera.data.angle * 0.5)) / max(frame_size, 1)
@@ -503,6 +714,7 @@ def render_wire(
                 distance,
                 orbit_direction(front, angle),
                 height,
+                horizontal,
             )
             scene.render.filepath = str(out_dir / f"wire_{index:02d}.png")
             bpy.ops.render.render(write_still=True)
@@ -539,11 +751,15 @@ def main():
     camera = bpy.data.objects.new("SheetCamera", camera_data)
     scene.collection.objects.link(camera)
     scene.camera = camera
-    lights = (add_area("Key"), add_area("Fill"), add_area("Wrap"), add_area("Rim"))
-    distance = fit_distance(extent, camera, float(job.get("distance_scale", 1.0)))
+    lights = (add_area("Key"), add_area("Wrap"), add_area("Rim"))
+    ground = add_contact_shadow(center, extent, minimum)
 
     out_dir = Path(job["output_dir"])
     out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "stats.json").write_text(
+        json.dumps({"triangles": sheetlib.triangle_count(meshes)}),
+        encoding="utf-8",
+    )
     passes = list(job["passes"])
     frames = int(job["frames"])
     wire_frames = frames if job.get("wire") else 0
@@ -552,7 +768,20 @@ def main():
     front = job.get("front") or "-Y"
     if front not in FRONTS:
         raise RuntimeError(f"Unknown front side: {front}")
+    height = float(job.get("height", 0.0))
+    distance, horizontal = orbit_radius(
+        camera,
+        extent,
+        front,
+        frames,
+        float(job["start_degrees"]),
+        float(job["step_degrees"]),
+        height,
+        float(job.get("distance_scale", 1.0)),
+    )
 
+    raytracing = bool(job.get("raytracing", True))
+    cycles = bool(job.get("cycles", False))
     for pass_name in passes:
         apply_pass(pass_name, resolved)
         if pass_name in DATA_PASSES:
@@ -566,11 +795,10 @@ def main():
         except TypeError:
             scene.view_settings.view_transform = "Standard"
         lit = pass_name == "material"
+        ground.hide_render = not lit
         # Other rows stay at the texture's real brightness. Material was reading too dark.
-        scene.view_settings.exposure = 0.15 if lit else 0.0
-        scene.eevee.use_raytracing = lit
-        set_gtao(scene, lit)
-        scene.eevee.use_shadows = lit
+        scene.view_settings.exposure = float(job.get("exposure", 0.15)) if lit else 0.0
+        prepare_engine(scene, lit, raytracing, cycles)
         scene.eevee.taa_render_samples = 32 if lit else 16
         for index in range(frames):
             angle = float(job["start_degrees"]) + index * float(job["step_degrees"])
@@ -581,7 +809,8 @@ def main():
                 extent,
                 distance,
                 orbit_direction(front, angle),
-                float(job.get("height", 0.0)),
+                height,
+                horizontal,
             )
             scene.render.filepath = str(out_dir / f"{pass_name}_{index:02d}.png")
             bpy.ops.render.render(write_still=True)
@@ -599,6 +828,7 @@ def main():
             center,
             extent,
             distance,
+            horizontal,
             front,
             frames,
             float(job["start_degrees"]),
@@ -610,6 +840,10 @@ def main():
             out_dir,
             done,
             total,
+            raytracing,
+            cycles,
+            float(job.get("exposure", 0.15)),
+            ground,
         )
     print("RESULT ok", flush=True)
 

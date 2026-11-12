@@ -33,6 +33,7 @@ def main():
     payload = {
         "materials": materials,
         "mesh_count": len(meshes),
+        "triangles": sheetlib.triangle_count(meshes),
         "size": [round(size.x, 4), round(size.y, 4), round(size.z, 4)],
     }
     Path(out_path).write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

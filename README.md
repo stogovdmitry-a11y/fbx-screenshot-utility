@@ -18,9 +18,24 @@ Desktop app for Windows. Drop an FBX in, assign textures to the existing materia
 - The **Long side** value is the long side of the finished sheet, not of a single frame.
 - Camera: frame count, even step, start angle, distance scale, and height as a fraction of the model. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
 - Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass.
-- Name and task are printed on the sheet. The date can be added to the footer and to the file name. If that file already exists, a number is appended.
+- The lit Material row gets a soft disc under the feet, so the character reads as standing on something. It is not a shadow from the key light, and the flat texture rows do not get it.
+- Under each texture row name the sheet prints that map's resolution, for example `4096×4096`. Material and wireframe rows skip it. If several slots disagree, the sizes are listed side by side.
 - Background color is shared by the render and the sheet padding.
-- The sheet can open in its own window. Last folders, texture assignments, and options are remembered.
+- **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window. Last folders, texture assignments, and options are remembered.
+
+## On the sheet
+
+Text uses **Exon Regular**, bundled in `fonts/`. There is no font picker. **Labels**, **Caption**, and **Date** are sizes for a 512 px frame and scale with the sheet.
+
+The dark bar at the bottom holds Task, Project, and Artist, left-aligned, in that order. Empty lines are left out. The labels are a bit dimmer than the values. One **Caption** size covers all three.
+
+The date sits in the top right at half opacity. The same inset is used on the right of the logo.
+
+**Logo** is off by default. Turn it on, pick a file, and it lands in the bottom right of the dark bar. Height comes from the bar, not from the file, and transparent edges are trimmed first.
+
+**Triangle count** is off by default. When it is on, `Triangles Count:` plus the number (grouped with spaces) sits just above the dark bar, at the bottom of the frames. The count is tessellated triangles, so a quad counts as two.
+
+The date can also go into the file name. If that file already exists, a number is appended.
 
 ## Character Pipeline
 
@@ -45,6 +60,8 @@ On by default. This is the packed character layout, not a set of separate roughn
 **Alpha from Base Color** is off by default. Turn it on only when the base color really carries opacity. Hair cards often need it. A solid head usually does not.
 
 **Special Masks** is an optional texture and an optional sheet row. Leave both alone unless you want that mask on the sheet.
+
+**Split Masks Texture**, under the texture list, writes the Masks map out as separate grayscale files next to the source: `[name]_Roughness`, `_Emissive`, `_Metallic`, and `_Translucency` when the file has an alpha channel. Same folder and extension. Running it again overwrites those files. Roughness is copied as stored: bright stays rough.
 
 Turn Character Pipeline off to assign Roughness or Smoothness, Metallic, AO, and Opacity as separate files. Smoothness means bright is glossy (`1 − roughness`).
 

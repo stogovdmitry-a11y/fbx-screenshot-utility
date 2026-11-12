@@ -26,6 +26,20 @@ def mesh_objects():
     return [obj for obj in bpy.data.objects if obj.type == "MESH" and not obj.hide_render]
 
 
+def triangle_count(meshes):
+    """Tessellated triangles. A quad counts as two."""
+    total = 0
+    for obj in meshes:
+        mesh = obj.data
+        if mesh is None:
+            continue
+        for poly in mesh.polygons:
+            corners = len(poly.vertices)
+            if corners >= 3:
+                total += corners - 2
+    return total
+
+
 def ensure_materials():
     """Give every mesh a named slot so the UI has something to assign to."""
     for obj in mesh_objects():

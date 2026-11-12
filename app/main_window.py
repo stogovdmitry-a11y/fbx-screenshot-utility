@@ -9,8 +9,17 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, QSize, QThread, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDragEnterEvent, QDropEvent, QImageReader, QPalette, QPixmap
+from PySide6.QtCore import QSettings, QSize, QThread, Qt, QTimer, QUrl, Signal
+from PySide6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QDragEnterEvent,
+    QDropEvent,
+    QImageReader,
+    QKeySequence,
+    QPalette,
+    QPixmap,
+)
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -34,6 +43,8 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from PIL import Image, UnidentifiedImageError
 
 from app.bridge import publish, take_request, unpublish
 from app.composite import PASS_LABELS, build_sheet, frame_size_for_long_side
@@ -60,16 +71,36 @@ ALL_CHANNELS = OWL_CHANNELS + (
     ("opacity", "Opacity"),
 )
 PASSES = (
+    ("material", "Material"),
     ("basecolor", "Base Color"),
     ("normal", "Normal"),
     ("roughness", "Roughness"),
     ("metallic", "Metallic"),
     ("ao", "AO"),
     ("special", "Special Masks"),
-    ("material", "Material"),
 )
 DEFAULT_PASSES = {"basecolor", "normal", "roughness", "material"}
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.bmp)"
+# Character mask: R roughness (bright is rough), G emissive, B metallic, A translucency.
+MASK_CHANNEL_NAMES = ("Roughness", "Emissive", "Metallic", "Translucency")
+
+
+def split_mask_file(path):
+    """Write each mask channel next to the source. Alpha is included only when the file has one."""
+    source = Path(path)
+    with Image.open(source) as image:
+        image.load()
+        has_alpha = "A" in image.getbands() or (image.mode == "P" and "transparency" in image.info)
+        flat = image.convert("RGBA" if has_alpha else "RGB")
+        bands = [band.copy() for band in flat.split()]
+    written = []
+    names = MASK_CHANNEL_NAMES if has_alpha else MASK_CHANNEL_NAMES[:3]
+    for band, name in zip(bands, names):
+        rgb = Image.merge("RGB", (band, band, band))
+        dest = source.with_name(f"{source.stem}_{name}{source.suffix}")
+        rgb.save(dest)
+        written.append(dest)
+    return written
 
 
 def apply_dark(app):
@@ -87,6 +118,13 @@ def apply_dark(app):
     palette.setColor(QPalette.ColorRole.ToolTipBase, QColor(32, 32, 32))
     palette.setColor(QPalette.ColorRole.ToolTipText, QColor(230, 230, 230))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(140, 140, 140))
+    # setColor(role, color) paints every group, including Disabled, so a switched-off
+    # checkbox stayed the same white as a live one.
+    dim = QPalette.ColorGroup.Disabled
+    palette.setColor(dim, QPalette.ColorRole.WindowText, QColor(110, 110, 110))
+    palette.setColor(dim, QPalette.ColorRole.Text, QColor(110, 110, 110))
+    palette.setColor(dim, QPalette.ColorRole.ButtonText, QColor(110, 110, 110))
+    palette.setColor(dim, QPalette.ColorRole.Button, QColor(48, 48, 48))
     app.setPalette(palette)
 
 
@@ -210,6 +248,7 @@ class MainWindow(QMainWindow):
         self._preview_path = ""
         self._sheet_window = None
         self._loaded_fbx = ""
+        self._triangles = None
         self._loading_slots = False
         self._render_after_load = False
         self._render_when_free = False
@@ -265,10 +304,23 @@ class MainWindow(QMainWindow):
         column = QVBoxLayout(panel)
         column.setContentsMargins(0, 0, 0, 0)
 
+        captions = QFormLayout()
+        captions.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.caption_task = QLineEdit()
+        self.caption_task.setPlaceholderText("Printed on the sheet as typed")
+        captions.addRow("Task", self.caption_task)
+        self.caption_project = QLineEdit()
+        self.caption_project.setPlaceholderText("Printed on the sheet as typed")
+        captions.addRow("Project", self.caption_project)
+        self.caption_name = QLineEdit()
+        self.caption_name.setPlaceholderText("Printed on the sheet as typed")
+        captions.addRow("Artist", self.caption_name)
+        column.addLayout(captions)
+
         row = QHBoxLayout()
         self.fbx_edit = QLineEdit()
         self.fbx_edit.setPlaceholderText("Drop an FBX here or browse")
-        self.fbx_edit.returnPressed.connect(self.load_fbx)
+        self.fbx_edit.returnPressed.connect(lambda: self.load_fbx(follow_fbx=True))
         row.addWidget(self.fbx_edit, 1)
         self.open_btn = QPushButton("Open FBX")
         self.open_btn.clicked.connect(self._browse_fbx)
@@ -284,6 +336,14 @@ class MainWindow(QMainWindow):
         self.reset_btn.setEnabled(False)
         self.reset_btn.clicked.connect(self._reset_textures)
         column.addWidget(self.reset_btn, 0, Qt.AlignmentFlag.AlignLeft)
+
+        self.split_btn = QPushButton("Split Masks Texture")
+        self.split_btn.setEnabled(False)
+        self.split_btn.setToolTip(
+            "Splits the Masks map into separate textures next to the file. "
+            "R Roughness, G Emissive, B Metallic, and A Translucency when the file has alpha."
+        )
+        self.split_btn.clicked.connect(self._split_masks)
 
         self.slot_host = QWidget()
         self.slot_layout = QVBoxLayout(self.slot_host)
@@ -333,19 +393,39 @@ class MainWindow(QMainWindow):
         form.addRow("Distance", self.distance)
 
         self.height = QDoubleSpinBox()
-        self.height.setRange(-1, 1)
+        self.height.setRange(-2, 2)
         self.height.setSingleStep(0.05)
         self.height.setDecimals(2)
         self.height.setValue(0)
-        self.height.setToolTip("Camera lift as a fraction of the model height. The camera still aims at the center.")
+        self.height.setToolTip(
+            "Camera pitch. 1.0 looks down at 45°, 2.0 is about 63°. The camera backs up so the model stays in frame."
+        )
         form.addRow("Height", self.height)
 
+        self.exposure = QDoubleSpinBox()
+        self.exposure.setRange(-2, 3)
+        self.exposure.setSingleStep(0.05)
+        self.exposure.setDecimals(2)
+        self.exposure.setValue(0.15)
+        self.exposure.setToolTip(
+            "Stops on the lit material row. 0.15 is the usual brightness. Texture rows stay as they are."
+        )
+        form.addRow("Exposure", self.exposure)
+
         self.frame_size = QComboBox()
-        for size in (384, 512, 768, 1024, 1536, 2048, 3072, 4096):
+        for size in (384, 512, 768, 1024, 1536, 2048, 3072, 4096, 6144, 8192):
             self.frame_size.addItem(str(size), size)
         self.frame_size.setCurrentIndex(2)
         self.frame_size.setToolTip("Long side of the finished sheet, not of one frame.")
         form.addRow("Long side", self.frame_size)
+
+        self.gap = QSpinBox()
+        self.gap.setRange(0, 400)
+        self.gap.setSingleStep(4)
+        self.gap.setValue(0)
+        self.gap.setSuffix(" px")
+        self.gap.setToolTip("Space between frames, in frame pixels. It scales with the sheet.")
+        form.addRow("Gap", self.gap)
 
         self.front = QComboBox()
         for value, label in (("-Y", "−Y"), ("+Y", "+Y"), ("-X", "−X"), ("+X", "+X")):
@@ -354,8 +434,23 @@ class MainWindow(QMainWindow):
         form.addRow("Front", self.front)
         column.addWidget(form_host)
 
+        flags = QVBoxLayout()
         self.invert_g = QCheckBox("Invert normal G (DirectX)")
-        column.addWidget(self.invert_g)
+        flags.addWidget(self.invert_g)
+
+        self.raytracing = QCheckBox("Raytracing")
+        self.raytracing.setChecked(True)
+        self.raytracing.setToolTip(
+            "Screen-trace reflections on the Material row, and the contact AO that comes with it. Shadows stay either way."
+        )
+        flags.addWidget(self.raytracing)
+
+        self.cycles = QCheckBox("Cycles")
+        self.cycles.setToolTip(
+            "Path-trace the Material row on the GPU. Real shadows and GI. The other rows stay on EEVEE."
+        )
+        self.cycles.toggled.connect(self._toggle_cycles)
+        flags.addWidget(self.cycles)
 
         self.character = QCheckBox("Character Pipeline")
         self.character.setToolTip(
@@ -363,7 +458,7 @@ class MainWindow(QMainWindow):
             "Opacity is in the Base Color alpha, and that checkbox is off by default."
         )
         self.character.toggled.connect(self._apply_pipeline)
-        column.addWidget(self.character)
+        flags.addWidget(self.character)
 
         self._bg_color = QColor("#3c3c3c")
         self.bg_color_btn = QPushButton()
@@ -373,7 +468,7 @@ class MainWindow(QMainWindow):
         bg_row.addWidget(QLabel("Background"))
         bg_row.addWidget(self.bg_color_btn)
         bg_row.addStretch(1)
-        column.addLayout(bg_row)
+        flags.addLayout(bg_row)
         self._paint_bg_button()
 
         self.surface_model = QComboBox()
@@ -385,7 +480,8 @@ class MainWindow(QMainWindow):
         self._surface_caption = QLabel("Highlight")
         surface_row.addWidget(self._surface_caption)
         surface_row.addWidget(self.surface_model, 1)
-        column.addLayout(surface_row)
+        flags.addLayout(surface_row)
+        flags.addStretch(1)
 
         passes = QGroupBox("Rows")
         pass_list = QVBoxLayout(passes)
@@ -395,7 +491,6 @@ class MainWindow(QMainWindow):
             box.setChecked(key in DEFAULT_PASSES)
             self.pass_boxes[key] = box
             pass_list.addWidget(box)
-        column.addWidget(passes)
 
         grid_box = QGroupBox("Wireframe row")
         grid_box.setCheckable(True)
@@ -421,20 +516,62 @@ class MainWindow(QMainWindow):
         grid_form.addRow("Color", self.wire_color_btn)
         self._paint_wire_button()
         grid_box.toggled.connect(self._set_grid_enabled)
-        column.addWidget(grid_box)
         self._set_grid_enabled(False)
 
-        captions = QFormLayout()
-        captions.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        self.caption_name = QLineEdit()
-        self.caption_name.setPlaceholderText("Printed on the sheet as typed")
-        captions.addRow("Name", self.caption_name)
-        self.caption_task = QLineEdit()
-        self.caption_task.setPlaceholderText("Printed on the sheet as typed")
-        captions.addRow("Task", self.caption_task)
-        column.addLayout(captions)
+        side = QHBoxLayout()
+        side.setSpacing(16)
+        side.addLayout(flags)
+        side.addWidget(passes, 0, Qt.AlignmentFlag.AlignTop)
+        side.addWidget(grid_box, 0, Qt.AlignmentFlag.AlignTop)
+        side.addStretch(1)
+        column.addLayout(side)
+
+        self.date_in_name = QCheckBox("Date in the file name")
+        self.date_in_name.toggled.connect(self._refresh_output_name)
+        self.number_if_exists = QCheckBox("Number the file if it already exists")
+        self.separate_window = QCheckBox("Open the sheet in a separate window")
+        self.separate_window.toggled.connect(self._toggle_separate_preview)
+        self.triangles_enabled = QCheckBox("Triangle count")
+        self.triangles_enabled.setToolTip("Prints Triangles Count just above the dark footer.")
+
+        checks = QVBoxLayout()
+        checks.addWidget(self.date_in_name)
+        checks.addWidget(self.number_if_exists)
+        checks.addWidget(self.separate_window)
+        checks.addWidget(self.triangles_enabled)
+        checks.addSpacing(10)
+        logo_row = QHBoxLayout()
+        self.logo_enabled = QCheckBox("Logo")
+        self.logo_enabled.toggled.connect(self._toggle_logo)
+        logo_row.addWidget(self.logo_enabled)
+        self.logo_edit = QLineEdit()
+        self.logo_edit.setPlaceholderText("None")
+        self.logo_edit.setClearButtonEnabled(True)
+        logo_row.addWidget(self.logo_edit, 1)
+        self.logo_browse = QPushButton("Browse")
+        self.logo_browse.clicked.connect(self._browse_logo)
+        logo_row.addWidget(self.logo_browse)
+        checks.addLayout(logo_row)
+        self._toggle_logo(False)
+        checks.addStretch(1)
+
+        text_box = QGroupBox("Text")
+        text_form = QFormLayout(text_box)
+        text_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        self.font_labels = self._font_size(40, "Row names on the left.")
+        self.font_caption = self._font_size(28, "Task, Project and Artist in the bottom bar.")
+        self.font_date = self._font_size(32, "Date in the top right corner.")
+        text_form.addRow("Labels", self.font_labels)
+        text_form.addRow("Caption", self.font_caption)
+        text_form.addRow("Date", self.font_date)
+
+        options = QHBoxLayout()
+        options.addLayout(checks, 1)
+        options.addWidget(text_box, 1)
+        column.addLayout(options)
 
         output_row = QHBoxLayout()
+        output_row.addWidget(QLabel("Output Directory"))
         self.output_edit = QLineEdit()
         self.output_edit.setPlaceholderText("Where to save the PNG")
         self.output_edit.textEdited.connect(self._output_edited)
@@ -442,21 +579,14 @@ class MainWindow(QMainWindow):
         browse_out = QPushButton("Browse")
         browse_out.clicked.connect(self._browse_output)
         output_row.addWidget(browse_out)
+        open_folder = QPushButton("Open folder")
+        open_folder.clicked.connect(self._open_output_folder)
+        output_row.addWidget(open_folder)
         column.addLayout(output_row)
 
-        self.date_in_name = QCheckBox("Date in the file name")
-        self.date_in_name.toggled.connect(self._refresh_output_name)
-        column.addWidget(self.date_in_name)
-
-        self.number_if_exists = QCheckBox("Number the file if it already exists")
-        column.addWidget(self.number_if_exists)
-
-        self.separate_window = QCheckBox("Open the sheet in a separate window")
-        self.separate_window.toggled.connect(self._toggle_separate_preview)
-        column.addWidget(self.separate_window)
-
         buttons = QHBoxLayout()
-        self.render_btn = QPushButton("Build sheet")
+        self.render_btn = QPushButton("Build sheet (F12)")
+        self.render_btn.setShortcut(QKeySequence(Qt.Key.Key_F12))
         self.render_btn.setEnabled(False)
         self.render_btn.clicked.connect(self.render)
         self.render_btn.setStyleSheet("padding: 8px 18px; font-weight: 600;")
@@ -486,6 +616,8 @@ class MainWindow(QMainWindow):
         self.start.setValue(float(self._settings.value("start", 0)))
         self.distance.setValue(float(self._settings.value("distance", 1)))
         self.height.setValue(float(self._settings.value("height", 0)))
+        self.exposure.setValue(float(self._settings.value("exposure", 0.15)))
+        self.gap.setValue(int(self._settings.value("gap", 0)))
         saved_size = int(self._settings.value("frame_size", 768))
         index = self.frame_size.findData(saved_size)
         if index >= 0:
@@ -495,6 +627,9 @@ class MainWindow(QMainWindow):
         if front_index >= 0:
             self.front.setCurrentIndex(front_index)
         self.invert_g.setChecked(self._settings.value("invert_g", False) in (True, "true", "1"))
+        self.raytracing.setChecked(self._settings.value("raytracing", True) in (True, "true", "1"))
+        self.cycles.setChecked(self._settings.value("cycles", False) in (True, "true", "1"))
+        self._toggle_cycles(self.cycles.isChecked())
         saved_pipeline = self._settings.value("character", self._settings.value("owlcat", True))
         self.character.setChecked(saved_pipeline in (True, "true", "1"))
         saved_bg = self._settings.value("bg_color", "#3c3c3c") or "#3c3c3c"
@@ -517,9 +652,13 @@ class MainWindow(QMainWindow):
                 box.setChecked(key in saved_passes)
         self.caption_name.setText(self._settings.value("caption_name", "") or "")
         self.caption_task.setText(self._settings.value("caption_task", "") or "")
+        self.caption_project.setText(self._settings.value("caption_project", "") or "")
         self.date_in_name.setChecked(self._settings.value("date_in_name", False) in (True, "true", "1"))
         self.number_if_exists.setChecked(self._settings.value("number_if_exists", False) in (True, "true", "1"))
         self.separate_window.setChecked(self._settings.value("separate_window", False) in (True, "true", "1"))
+        self.triangles_enabled.setChecked(self._settings.value("triangles_enabled", False) in (True, "true", "1"))
+        self.logo_edit.setText(self._settings.value("logo_path", "") or "")
+        self.logo_enabled.setChecked(self._settings.value("logo_enabled", False) in (True, "true", "1"))
         self.grid_enabled.setChecked(self._settings.value("grid_enabled", False) in (True, "true", "1"))
         grid_pass = self._settings.value("grid_pass", "material") or "material"
         grid_index = self.grid_pass.findData(grid_pass)
@@ -531,6 +670,16 @@ class MainWindow(QMainWindow):
         if not self._wire_color.isValid():
             self._wire_color = QColor("#111111")
         self._paint_wire_button()
+        self._output_auto = self._settings.value("output_auto", True) in (True, "true", "1")
+        saved_output = self._settings.value("output_path", "") or ""
+        if saved_output:
+            self.output_edit.setText(str(saved_output))
+        self.font_labels.setValue(int(self._settings.value("font_labels", 40)))
+        saved_caption = self._settings.value("font_caption", None)
+        if saved_caption in (None, ""):
+            saved_caption = self._settings.value("font_name", 28)
+        self.font_caption.setValue(int(saved_caption))
+        self.font_date.setValue(int(self._settings.value("font_date", 32)))
         last_fbx = self._settings.value("last_fbx", "") or ""
         if self._take_inbox():
             return
@@ -545,22 +694,35 @@ class MainWindow(QMainWindow):
         self._settings.setValue("start", self.start.value())
         self._settings.setValue("distance", self.distance.value())
         self._settings.setValue("height", self.height.value())
+        self._settings.setValue("exposure", self.exposure.value())
+        self._settings.setValue("gap", self.gap.value())
         self._settings.setValue("frame_size", self.frame_size.currentData())
         self._settings.setValue("front", self.front.currentData())
         self._settings.setValue("invert_g", self.invert_g.isChecked())
+        self._settings.setValue("raytracing", self.raytracing.isChecked())
+        self._settings.setValue("cycles", self.cycles.isChecked())
         self._settings.setValue("character", self.character.isChecked())
         self._settings.setValue("bg_color", self._bg_color.name())
         self._settings.setValue("surface_model", self.surface_model.currentData())
         self._settings.setValue("passes", [key for key, box in self.pass_boxes.items() if box.isChecked()])
         self._settings.setValue("caption_name", self.caption_name.text())
         self._settings.setValue("caption_task", self.caption_task.text())
+        self._settings.setValue("caption_project", self.caption_project.text())
         self._settings.setValue("date_in_name", self.date_in_name.isChecked())
         self._settings.setValue("number_if_exists", self.number_if_exists.isChecked())
         self._settings.setValue("separate_window", self.separate_window.isChecked())
+        self._settings.setValue("triangles_enabled", self.triangles_enabled.isChecked())
+        self._settings.setValue("logo_path", self.logo_edit.text().strip())
+        self._settings.setValue("logo_enabled", self.logo_enabled.isChecked())
         self._settings.setValue("grid_enabled", self.grid_enabled.isChecked())
         self._settings.setValue("grid_pass", self.grid_pass.currentData())
         self._settings.setValue("grid_thickness", self.grid_thickness.value())
         self._settings.setValue("wire_color", self._wire_color.name())
+        self._settings.setValue("output_path", self.output_edit.text().strip())
+        self._settings.setValue("output_auto", self._output_auto)
+        self._settings.setValue("font_labels", self.font_labels.value())
+        self._settings.setValue("font_caption", self.font_caption.value())
+        self._settings.setValue("font_date", self.font_date.value())
         if self._loaded_fbx:
             self._settings.setValue("last_fbx", self._loaded_fbx)
         self._save_textures()
@@ -586,7 +748,7 @@ class MainWindow(QMainWindow):
             path = url.toLocalFile()
             if path.lower().endswith(".fbx"):
                 self.fbx_edit.setText(path)
-                self.load_fbx()
+                self.load_fbx(follow_fbx=True)
                 event.acceptProposedAction()
                 return
         event.ignore()
@@ -595,7 +757,7 @@ class MainWindow(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, "FBX", self._dir_hint(), "FBX (*.fbx)")
         if path:
             self.fbx_edit.setText(path)
-            self.load_fbx()
+            self.load_fbx(follow_fbx=True)
 
     def _browse_blender(self):
         path, _ = QFileDialog.getOpenFileName(self, "blender.exe", self.blender_edit.text(), "blender.exe (blender.exe)")
@@ -611,8 +773,63 @@ class MainWindow(QMainWindow):
             self._remember_output_dir(path)
             self.output_edit.setText(self._dated_output(path))
 
+    def _texture_size(self, path):
+        reader = QImageReader(str(path))
+        size = reader.size()
+        if size.isValid() and size.width() > 0 and size.height() > 0:
+            return size.width(), size.height()
+        try:
+            with Image.open(path) as image:
+                return image.size
+        except (OSError, UnidentifiedImageError):
+            return None
+
+    def _sheet_sizes(self, materials):
+        found = {}
+        for maps in materials.values():
+            for key in ("basecolor", "normal", "roughness", "metallic", "ao", "special"):
+                path = (maps.get(key) or "").strip()
+                if not path or not Path(path).is_file():
+                    continue
+                wh = self._texture_size(path)
+                if not wh:
+                    continue
+                found.setdefault(key, [])
+                if wh not in found[key]:
+                    found[key].append(wh)
+        return {key: "  ".join(f"{w}×{h}" for w, h in pairs) for key, pairs in found.items()}
+
+    def _triangle_count(self, folder):
+        stats = Path(folder) / "stats.json"
+        if stats.is_file():
+            try:
+                value = json.loads(stats.read_text(encoding="utf-8")).get("triangles")
+            except (OSError, json.JSONDecodeError, TypeError):
+                value = None
+            if isinstance(value, int):
+                return value
+        return self._triangles
+
+    def _toggle_logo(self, enabled):
+        self.logo_edit.setEnabled(enabled)
+        self.logo_browse.setEnabled(enabled)
+
+    def _browse_logo(self):
+        path, _ = QFileDialog.getOpenFileName(self, "Logo", self.logo_edit.text() or self._texture_dir(), IMAGE_FILTER)
+        if path:
+            self.logo_edit.setText(path)
+            self._remember_texture_dir(path)
+
     def _output_edited(self):
         self._output_auto = not bool(self.output_edit.text().strip())
+
+    def _open_output_folder(self):
+        output = self.output_edit.text().strip()
+        folder = Path(output).parent if output else Path(self._output_dir())
+        if not folder.is_dir():
+            QMessageBox.warning(self, "Screenshot Utility", "That folder isn't there yet")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _dated_output(self, path):
         target = Path(path)
@@ -687,6 +904,7 @@ class MainWindow(QMainWindow):
         self.open_btn.setEnabled(not busy)
         self.render_btn.setEnabled(not busy and bool(self._slots))
         self.reset_btn.setEnabled(not busy and bool(self._slots))
+        self.split_btn.setEnabled(not busy and bool(self._slots))
         self.cancel_btn.setEnabled(busy)
         if not busy:
             self.progress.setRange(0, 1)
@@ -708,6 +926,7 @@ class MainWindow(QMainWindow):
             return
         interesting = (
             line.startswith("RESULT")
+            or line.startswith("CYCLES")
             or line.startswith("Traceback")
             or "Error" in line
             or "Exception" in line
@@ -764,7 +983,7 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.status.setText("From Blender…")
-        self.load_fbx()
+        self.load_fbx(follow_fbx=True)
         return True
 
     def _on_progress(self, done, total, pass_name):
@@ -781,16 +1000,27 @@ class MainWindow(QMainWindow):
         lines = [line for line in text.strip().splitlines() if line.strip()]
         QMessageBox.warning(self, "Screenshot Utility", "\n".join(lines[-12:]) or "Failed")
 
-    def load_fbx(self):
+    def load_fbx(self, follow_fbx=False):
         fbx = self.fbx_edit.text().strip()
         if not fbx:
             return
         if not Path(fbx).is_file():
             QMessageBox.warning(self, "Screenshot Utility", "FBX not found")
             return
-        self._settings.setValue("fbx_dir", str(Path(fbx).parent))
+        folder = Path(fbx).resolve().parent
+        self._settings.setValue("fbx_dir", str(folder))
         self._settings.setValue("last_fbx", str(Path(fbx).resolve()))
-        if self._output_auto:
+        # The save folder follows the FBX only when the user picks a new file.
+        # A restart reloads the last FBX and keeps the folder from last time.
+        if follow_fbx:
+            self._settings.setValue("output_dir", str(folder))
+            current = self.output_edit.text().strip()
+            if self._output_auto or not current:
+                name = Path(fbx).stem + "_sheet.png"
+            else:
+                name = Path(current).name
+            self.output_edit.setText(self._dated_output(folder / name))
+        elif not self.output_edit.text().strip():
             self.output_edit.setText(self._auto_output(fbx))
         self._save_textures()
         saved = self._textures_for(Path(fbx).resolve())
@@ -830,15 +1060,19 @@ class MainWindow(QMainWindow):
         while self.slot_layout.count():
             item = self.slot_layout.takeAt(0)
             widget = item.widget()
-            if widget is not None:
+            if widget is not None and widget is not self.split_btn:
                 widget.deleteLater()
         self._loading_slots = True
         self._slots = {}
         for mat in info.get("materials") or []:
             self._add_slot(mat, saved.get(mat["name"]) if isinstance(saved, dict) else None)
         self._loaded_fbx = str(Path(self.fbx_edit.text().strip()).resolve())
+        triangles = info.get("triangles")
+        self._triangles = int(triangles) if isinstance(triangles, int) else None
         self._loading_slots = False
         self._save_textures()
+        self.slot_layout.addWidget(self.split_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.split_btn.setEnabled(bool(self._slots))
         self.slot_layout.addStretch(1)
         size = info.get("size") or [0, 0, 0]
         self.status.setText(
@@ -1011,6 +1245,39 @@ class MainWindow(QMainWindow):
             line.setText(path)
             self._remember_texture_dir(path)
 
+    def _split_masks(self):
+        paths = []
+        seen = set()
+        for slot in self._slots.values():
+            line = slot["fields"].get("masks")
+            if line is None:
+                continue
+            text = line.text().strip()
+            if not text:
+                continue
+            key = str(Path(text)).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            paths.append(Path(text))
+        if not paths:
+            QMessageBox.information(self, "Screenshot Utility", "Set a Masks texture first.")
+            return
+        missing = [str(path) for path in paths if not path.is_file()]
+        if missing:
+            QMessageBox.warning(self, "Screenshot Utility", "These Masks textures are missing:\n" + "\n".join(missing))
+            return
+        written = []
+        try:
+            for path in paths:
+                written.extend(split_mask_file(path))
+        except (OSError, UnidentifiedImageError, ValueError) as exc:
+            QMessageBox.warning(self, "Screenshot Utility", f"Could not split {path.name}:\n{exc}")
+            return
+        names = "\n".join(path.name for path in written)
+        self.status.setText(f"Split {len(written)} textures")
+        QMessageBox.information(self, "Screenshot Utility", "Wrote:\n" + names)
+
     def _collect_materials(self):
         collected = {}
         for name, slot in self._slots.items():
@@ -1019,10 +1286,28 @@ class MainWindow(QMainWindow):
             collected[name] = entry
         return collected
 
+    def _font_size(self, default, tip):
+        box = QSpinBox()
+        box.setRange(8, 200)
+        box.setValue(default)
+        box.setSuffix(" px")
+        box.setToolTip(tip + " This is the size next to a 512px frame. It scales with the frames.")
+        return box
+
+    def _sheet_fonts(self):
+        return {
+            "labels": self.font_labels.value(),
+            "caption": self.font_caption.value(),
+            "date": self.font_date.value(),
+        }
+
     def _set_grid_enabled(self, enabled):
         self.grid_pass.setEnabled(enabled)
         self.grid_thickness.setEnabled(enabled)
         self.wire_color_btn.setEnabled(enabled)
+
+    def _toggle_cycles(self, enabled):
+        self.raytracing.setEnabled(not enabled)
 
     def _paint_wire_button(self):
         color = self._wire_color.name()
@@ -1059,7 +1344,11 @@ class MainWindow(QMainWindow):
         }
 
     def _selected_passes(self):
-        return [key for key, box in self.pass_boxes.items() if self._pass_enabled(key) and box.isChecked()]
+        keys = [key for key, box in self.pass_boxes.items() if self._pass_enabled(key) and box.isChecked()]
+        if "material" in keys:
+            keys.remove("material")
+            keys.insert(0, "material")
+        return keys
 
     def render(self):
         fbx = self.fbx_edit.text().strip()
@@ -1080,6 +1369,10 @@ class MainWindow(QMainWindow):
             return
         if not output:
             QMessageBox.warning(self, "Screenshot Utility", "Choose where to save the PNG")
+            return
+        logo = self.logo_edit.text().strip() if self.logo_enabled.isChecked() else ""
+        if logo and not Path(logo).is_file():
+            QMessageBox.warning(self, "Screenshot Utility", "Logo file not found")
             return
         self._remember_output_dir(output)
         if not Path(self._blender_path()).is_file():
@@ -1102,8 +1395,13 @@ class MainWindow(QMainWindow):
         blender = self._blender_path()
         caption_name = self.caption_name.text()
         caption_task = self.caption_task.text()
+        caption_project = self.caption_project.text()
         labels = self._pass_labels()
+        sizes = self._sheet_sizes(materials)
         sheet_side = int(self.frame_size.currentData())
+        show_triangles = self.triangles_enabled.isChecked()
+        gap = self.gap.value()
+        fonts = self._sheet_fonts()
         render_frame = frame_size_for_long_side(
             sheet_side,
             self.frames.value(),
@@ -1112,6 +1410,11 @@ class MainWindow(QMainWindow):
             caption_name,
             caption_task,
             labels,
+            gap,
+            fonts,
+            caption_project,
+            0 if show_triangles else None,
+            sizes,
         )
         job_body = {
             "fbx": fbx,
@@ -1120,10 +1423,13 @@ class MainWindow(QMainWindow):
             "start_degrees": self.start.value(),
             "distance_scale": self.distance.value(),
             "height": self.height.value(),
+            "exposure": self.exposure.value(),
             "frame_size": render_frame,
             "sheet_long_side": sheet_side,
             "front": self.front.currentData(),
             "invert_normal_g": self.invert_g.isChecked(),
+            "raytracing": self.raytracing.isChecked(),
+            "cycles": self.cycles.isChecked(),
             "character": self.character.isChecked(),
             "background": [self._bg_color.red(), self._bg_color.green(), self._bg_color.blue()],
             "surface_model": self.surface_model.currentData(),
@@ -1159,6 +1465,12 @@ class MainWindow(QMainWindow):
                     job.get("pass_labels"),
                     job.get("sheet_long_side"),
                     job.get("background"),
+                    gap,
+                    fonts,
+                    caption_project,
+                    logo,
+                    self._triangle_count(temp) if show_triangles else None,
+                    sizes,
                 ))
             finally:
                 shutil.rmtree(temp, ignore_errors=True)
