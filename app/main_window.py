@@ -89,12 +89,16 @@ IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.bmp)"
 MASK_CHANNEL_NAMES = ("Roughness", "Emissive", "Metallic", "Translucency")
 
 
+def _image_has_alpha(image):
+    return "A" in image.getbands() or (image.mode == "P" and "transparency" in image.info)
+
+
 def split_mask_file(path):
     """Write each mask channel next to the source. Alpha is included only when the file has one."""
     source = Path(path)
     with Image.open(source) as image:
         image.load()
-        has_alpha = "A" in image.getbands() or (image.mode == "P" and "transparency" in image.info)
+        has_alpha = _image_has_alpha(image)
         flat = image.convert("RGBA" if has_alpha else "RGB")
         bands = [band.copy() for band in flat.split()]
     written = []
@@ -105,6 +109,20 @@ def split_mask_file(path):
         rgb.save(dest)
         written.append(dest)
     return written
+
+
+def extract_opacity_file(path):
+    """Write the Base Color alpha next to the source. None when the file has no alpha."""
+    source = Path(path)
+    with Image.open(source) as image:
+        image.load()
+        if not _image_has_alpha(image):
+            return None
+        alpha = image.convert("RGBA").getchannel("A").copy()
+    rgb = Image.merge("RGB", (alpha, alpha, alpha))
+    dest = source.with_name(f"{source.stem}_Opacity{source.suffix}")
+    rgb.save(dest)
+    return dest
 
 
 def apply_dark(app):
@@ -383,6 +401,16 @@ class MainWindow(QMainWindow):
             "R Roughness, G Emissive, B Metallic, and A Translucency when the file has alpha."
         )
         self.split_btn.clicked.connect(self._split_masks)
+        self.extract_opacity = QCheckBox("Extract Opacity")
+        self.extract_opacity.setToolTip(
+            "Also writes the Base Color alpha next to that file as a grayscale Opacity map."
+        )
+        self.split_row = QWidget()
+        split_row = QHBoxLayout(self.split_row)
+        split_row.setContentsMargins(0, 0, 0, 0)
+        split_row.addWidget(self.split_btn)
+        split_row.addWidget(self.extract_opacity)
+        split_row.addStretch(1)
 
         self.slot_host = QWidget()
         self.slot_layout = QVBoxLayout(self.slot_host)
@@ -736,6 +764,7 @@ class MainWindow(QMainWindow):
         self.number_if_exists.setChecked(self._settings.value("number_if_exists", False) in (True, "true", "1"))
         self.separate_window.setChecked(self._settings.value("separate_window", False) in (True, "true", "1"))
         self.triangles_enabled.setChecked(self._settings.value("triangles_enabled", False) in (True, "true", "1"))
+        self.extract_opacity.setChecked(self._settings.value("extract_opacity", False) in (True, "true", "1"))
         self.logo_edit.setText(self._settings.value("logo_path", "") or "")
         self.logo_enabled.setChecked(self._settings.value("logo_enabled", False) in (True, "true", "1"))
         self.grid_enabled.setChecked(self._settings.value("grid_enabled", False) in (True, "true", "1"))
@@ -794,6 +823,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue("number_if_exists", self.number_if_exists.isChecked())
         self._settings.setValue("separate_window", self.separate_window.isChecked())
         self._settings.setValue("triangles_enabled", self.triangles_enabled.isChecked())
+        self._settings.setValue("extract_opacity", self.extract_opacity.isChecked())
         self._settings.setValue("logo_path", self.logo_edit.text().strip())
         self._settings.setValue("logo_enabled", self.logo_enabled.isChecked())
         self._settings.setValue("grid_enabled", self.grid_enabled.isChecked())
@@ -1142,7 +1172,7 @@ class MainWindow(QMainWindow):
         while self.slot_layout.count():
             item = self.slot_layout.takeAt(0)
             widget = item.widget()
-            if widget is not None and widget is not self.split_btn:
+            if widget is not None and widget is not self.split_row:
                 widget.deleteLater()
         self._loading_slots = True
         self._slots = {}
@@ -1153,7 +1183,7 @@ class MainWindow(QMainWindow):
         self._triangles = int(triangles) if isinstance(triangles, int) else None
         self._loading_slots = False
         self._save_textures()
-        self.slot_layout.addWidget(self.split_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        self.slot_layout.addWidget(self.split_row, 0, Qt.AlignmentFlag.AlignLeft)
         self.split_btn.setEnabled(bool(self._slots))
         self.slot_layout.addStretch(1)
         size = info.get("size") or [0, 0, 0]
@@ -1328,38 +1358,57 @@ class MainWindow(QMainWindow):
             line.setText(path)
             self._remember_texture_dir(path)
 
-    def _split_masks(self):
+    def _texture_paths(self, key):
         paths = []
         seen = set()
         for slot in self._slots.values():
-            line = slot["fields"].get("masks")
+            line = slot["fields"].get(key)
             if line is None:
                 continue
             text = line.text().strip()
             if not text:
                 continue
-            key = str(Path(text)).lower()
-            if key in seen:
+            token = str(Path(text)).lower()
+            if token in seen:
                 continue
-            seen.add(key)
+            seen.add(token)
             paths.append(Path(text))
+        return paths
+
+    def _split_masks(self):
+        paths = self._texture_paths("masks")
         if not paths:
             QMessageBox.information(self, "Screenshot Utility", "Set a Masks texture first.")
             return
-        missing = [str(path) for path in paths if not path.is_file()]
+        opacity_paths = self._texture_paths("basecolor") if self.extract_opacity.isChecked() else []
+        missing = [str(path) for path in paths + opacity_paths if not path.is_file()]
         if missing:
-            QMessageBox.warning(self, "Screenshot Utility", "These Masks textures are missing:\n" + "\n".join(missing))
+            QMessageBox.warning(self, "Screenshot Utility", "These textures are missing:\n" + "\n".join(missing))
             return
         written = []
+        skipped = []
         try:
             for path in paths:
                 written.extend(split_mask_file(path))
+            for path in opacity_paths:
+                dest = extract_opacity_file(path)
+                if dest is None:
+                    skipped.append(path)
+                else:
+                    written.append(dest)
         except (OSError, UnidentifiedImageError, ValueError) as exc:
             QMessageBox.warning(self, "Screenshot Utility", f"Could not split {path.name}:\n{exc}")
             return
-        names = "\n".join(path.name for path in written)
+        lines = ["Wrote:", *(path.name for path in written)]
+        if skipped:
+            lines.append("")
+            lines.append("No alpha channel, opacity skipped:")
+            lines.extend(path.name for path in skipped)
+        elif self.extract_opacity.isChecked() and not opacity_paths:
+            lines.append("")
+            lines.append("No Base Color texture is set, so opacity was not written.")
         self.status.setText(f"Split {len(written)} textures")
-        QMessageBox.information(self, "Screenshot Utility", "Wrote:\n" + names)
+        QMessageBox.information(self, "Screenshot Utility", "\n".join(lines))
 
     def _collect_materials(self):
         collected = {}

@@ -66,6 +66,8 @@ On by default. This is the packed character layout, not a set of separate roughn
 
 **Split Masks Texture**, under the texture list, writes the Masks map out as separate grayscale files next to the source: `[name]_Roughness`, `_Emissive`, `_Metallic`, and `_Translucency` when the file has an alpha channel. Same folder and extension. Running it again overwrites those files. Roughness is copied as stored: bright stays rough.
 
+**Extract Opacity** sits next to that button and is off by default. Turn it on and the same click also writes the Base Color alpha beside that file as `[name]_Opacity`. A Base Color with no alpha is skipped.
+
 Turn Character Pipeline off to assign Roughness or Smoothness, Metallic, AO, and Opacity as separate files. Smoothness means bright is glossy (`1 − roughness`).
 
 ## Run
