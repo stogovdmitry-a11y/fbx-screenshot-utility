@@ -883,7 +883,7 @@ class MainWindow(QMainWindow):
                 path += ".png"
             self._output_auto = False
             self._remember_output_dir(path)
-            self.output_edit.setText(self._dated_output(path))
+            self.output_edit.setText(path)
 
     def _texture_size(self, path):
         reader = QImageReader(str(path))
@@ -986,7 +986,7 @@ class MainWindow(QMainWindow):
             self._settings.setValue("output_dir", str(folder))
 
     def _auto_output(self, fbx):
-        return self._dated_output(self._output_dir() / (Path(fbx).stem + "_sheet.png"))
+        return self._dated_output(self._output_dir() / (Path(fbx).stem + ".png"))
 
     def _dir_hint(self):
         fbx = self.fbx_edit.text().strip()
@@ -1126,12 +1126,9 @@ class MainWindow(QMainWindow):
         # A restart reloads the last FBX and keeps the folder from last time.
         if follow_fbx:
             self._settings.setValue("output_dir", str(folder))
-            current = self.output_edit.text().strip()
-            if self._output_auto or not current:
-                name = Path(fbx).stem + "_sheet.png"
-            else:
-                name = Path(current).name
-            self.output_edit.setText(self._dated_output(folder / name))
+            self.date_in_name.setChecked(True)
+            self._output_auto = True
+            self.output_edit.setText(self._auto_output(fbx))
         elif not self.output_edit.text().strip():
             self.output_edit.setText(self._auto_output(fbx))
         self._save_textures()
@@ -1525,8 +1522,11 @@ class MainWindow(QMainWindow):
     def render(self):
         fbx = self.fbx_edit.text().strip()
         output = self.output_edit.text().strip()
-        if output and (self.date_in_name.isChecked() or self.number_if_exists.isChecked()):
+        if output and self._output_auto and self.date_in_name.isChecked():
             output = self._dated_output(output)
+            self.output_edit.setText(output)
+        elif output and self.number_if_exists.isChecked():
+            output = str(self._free_numbered(Path(output)))
             self.output_edit.setText(output)
         passes = self._selected_passes()
         grid = self._grid_row()

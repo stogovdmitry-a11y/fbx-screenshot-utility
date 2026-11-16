@@ -38,7 +38,7 @@ The date sits in the top right at half opacity. The same inset is used on the ri
 
 **Triangle count** is off by default. When it is on, `Triangles Count:` plus the number (grouped with spaces) sits just above the dark bar, at the bottom of the frames. The count is tessellated triangles, so a quad counts as two.
 
-The date can also go into the file name. If that file already exists, a number is appended.
+Choosing an FBX suggests `[FBX name]_[dd.mm.yyyy].png` in the output field. You can edit the name; choosing another FBX replaces it with that model's name. The date can be turned off. If the file already exists, a number can be appended.
 
 ## Character Pipeline
 

@@ -32,6 +32,9 @@ PLUGINS = (
 def main():
     if not PYSIDE.is_dir():
         raise SystemExit(f"Build folder not found: {PYSIDE}")
+    # PyInstaller can pick up Poppler's ICU from PATH; Qt uses the Windows ICU.
+    for name in ("icuuc.dll", "icudt78.dll"):
+        _remove(ROOT / name)
     for name in DLLS:
         _remove(PYSIDE / name)
     for name in PLUGINS:

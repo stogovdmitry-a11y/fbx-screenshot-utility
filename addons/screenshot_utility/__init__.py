@@ -13,7 +13,7 @@ from bpy.props import StringProperty
 bl_info = {
     "name": "Screenshot Utility",
     "author": "Dmitry Stogov",
-    "version": (1, 2, 1),
+    "version": (1, 2, 2),
     "blender": (4, 5, 0),
     "location": "Top bar",
     "description": "Send the current meshes to Screenshot Utility and render a turnaround sheet",
