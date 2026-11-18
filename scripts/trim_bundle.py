@@ -24,7 +24,6 @@ PLUGINS = (
     "plugins/imageformats/qpdf.dll",
     "plugins/imageformats/qsvg.dll",
     "plugins/iconengines",
-    "plugins/tls",
     "translations",
 )
 

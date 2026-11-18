@@ -25,6 +25,7 @@ Desktop app for Windows. Drop an FBX in, assign textures to the existing materia
 - Background color is shared by the render and the sheet padding.
 - **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window, scaled to fit that window. Last folders, texture assignments, and options are remembered.
 - The title bar shows the version. **GitHub**, next to the version at the bottom left, opens the repository.
+- On startup, the app checks for a newer stable release and displays a link next to **GitHub** when one is available.
 
 ## On the sheet
 

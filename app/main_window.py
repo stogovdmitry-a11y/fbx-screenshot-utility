@@ -21,6 +21,7 @@ from PySide6.QtGui import (
     QPalette,
     QPixmap,
 )
+from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -87,6 +88,14 @@ DEFAULT_PASSES = {"basecolor", "normal", "roughness", "material"}
 IMAGE_FILTER = "Images (*.png *.jpg *.jpeg *.tga *.tif *.tiff *.exr *.bmp)"
 # Character mask: R roughness (bright is rough), G emissive, B metallic, A translucency.
 MASK_CHANNEL_NAMES = ("Roughness", "Emissive", "Metallic", "Translucency")
+REPOSITORY_URL = "https://github.com/stogovdmitry-a11y/fbx-screenshot-utility"
+LATEST_RELEASE_URL = "https://api.github.com/repos/stogovdmitry-a11y/fbx-screenshot-utility/releases/latest"
+
+
+def _version_tuple(value):
+    if not isinstance(value, str) or not re.fullmatch(r"v?\d+\.\d+\.\d+", value):
+        return None
+    return tuple(int(part) for part in value.lstrip("v").split("."))
 
 
 def _image_has_alpha(image):
@@ -294,6 +303,7 @@ class MainWindow(QMainWindow):
         self._inbox_timer = QTimer(self)
         self._inbox_timer.timeout.connect(self._take_inbox)
         self._inbox_timer.start(500)
+        self._check_for_update()
 
     def _build(self):
         root = QWidget()
@@ -349,12 +359,45 @@ class MainWindow(QMainWindow):
         repo.setToolTip("Open the GitHub repository")
         repo.clicked.connect(
             lambda: QDesktopServices.openUrl(
-                QUrl("https://github.com/stogovdmitry-a11y/fbx-screenshot-utility")
+                QUrl(REPOSITORY_URL)
             )
         )
         foot.addWidget(repo)
+        self.update_label = QLabel()
+        self.update_label.setTextFormat(Qt.TextFormat.RichText)
+        self.update_label.setOpenExternalLinks(True)
+        foot.addWidget(self.update_label)
         foot.addStretch(1)
         layout.addLayout(foot)
+
+    def _check_for_update(self):
+        self._network = QNetworkAccessManager(self)
+        request = QNetworkRequest(QUrl(LATEST_RELEASE_URL))
+        request.setRawHeader(b"Accept", b"application/vnd.github+json")
+        request.setRawHeader(b"User-Agent", b"FBX-Screenshot-Utility")
+        request.setTransferTimeout(5000)
+        reply = self._network.get(request)
+        reply.finished.connect(lambda: self._update_checked(reply))
+
+    def _update_checked(self, reply):
+        try:
+            if reply.error() != QNetworkReply.NetworkError.NoError:
+                return
+            release = json.loads(bytes(reply.readAll()))
+            if not isinstance(release, dict) or release.get("draft") or release.get("prerelease"):
+                return
+            tag = release.get("tag_name")
+            latest = _version_tuple(tag)
+            current = _version_tuple(VERSION)
+            if latest is not None and current is not None and latest > current:
+                self.update_label.setText(
+                    f'<a href="{REPOSITORY_URL}/releases/tag/{tag}" '
+                    f'style="color: #ff5555;">New version available: {tag.lstrip("v")}</a>'
+                )
+        except (ValueError, TypeError):
+            pass
+        finally:
+            reply.deleteLater()
 
     def _build_materials(self):
         panel = QWidget()
