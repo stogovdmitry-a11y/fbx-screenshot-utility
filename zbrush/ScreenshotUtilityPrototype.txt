@@ -1,0 +1,53 @@
+// Export document views with the current material.
+// Load using ZScript > Load, then open ZPlugin > Screenshot Utility.
+[ISubPalette, "ZPlugin:Screenshot Utility"]
+[ISlider, "ZPlugin:Screenshot Utility:Views", 4, 1, 1, 36, "Number of views to capture"]
+[IButton, "ZPlugin:Screenshot Utility:Capture views", "Save views of the current model",
+    [If, ![IGet, Transform:Edit],
+        [Note, "Enter Edit mode with a 3D model before capturing."]
+    ,
+        [VarDef, filePath, ""]
+        [VarDef, basePath, ""]
+        [VarDef, framePath, ""]
+        [VarDef, exists, 0]
+        [VarDef, px, 0][VarDef, py, 0][VarDef, pz, 0]
+        [VarDef, sx, 0][VarDef, sy, 0][VarDef, sz, 0]
+        [VarDef, rx, 0][VarDef, ry, 0][VarDef, rz, 0]
+        [VarDef, frameRz, 0]
+        [VarDef, viewCount, 4]
+        [VarDef, step, 90]
+        [VarDef, angle, 0]
+        [VarSet, exists, 0]
+        [VarSet, viewCount, [IGet, "ZPlugin:Screenshot Utility:Views"]]
+        [VarSet, step, (360 / viewCount)]
+        [If, viewCount == 2, [VarSet, step, 90]]
+        [VarSet, filePath, [FileNameAsk, "*.png", "ZBrushView.png", "Choose a name for the views"]]
+        [If, [StrLength, filePath],
+            [VarSet, basePath, [StrMerge, [FileNameExtract, filePath, 1], [FileNameExtract, filePath, 2]]]
+            [VarSet, basePath, [StrMerge, basePath, "_views", viewCount]]
+            [Loop, viewCount,
+                [VarSet, framePath, [StrMerge, basePath, "_", n, ".png"]]
+                [If, [FileExists, framePath], [VarSet, exists, 1]]
+            , n]
+            [If, exists,
+                [Note, "A view file already exists. Choose a different name."]
+            ,
+                [TransformGet, px, py, pz, sx, sy, sz, rx, ry, rz]
+                [Loop, viewCount,
+                    // ZBrush's Euler rotations need a roll correction for the middle views.
+                    [VarSet, angle, (n * step)]
+                    [VarSet, frameRz, rz]
+                    [If, (angle >= 90) && (angle < 270), [VarSet, frameRz, (rz + 180)]]
+                    [TransformSet, px, py, pz, sx, sy, sz, rx, (ry + angle), frameRz]
+                    [VarSet, framePath, [StrMerge, basePath, "_", n, ".png"]]
+                    [FileNameSetNext, framePath]
+                    [IPress, Document:Export]
+                , n]
+                [TransformSet, px, py, pz, sx, sy, sz, rx, ry, rz]
+                [Note, "Capture finished. Check the images in the chosen folder."]
+            ]
+        ]
+    ]
+]
+[IEnable, "ZPlugin:Screenshot Utility:Views"]
+[IEnable, "ZPlugin:Screenshot Utility:Capture views"]

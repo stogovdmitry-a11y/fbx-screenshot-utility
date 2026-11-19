@@ -1,11 +1,11 @@
 # FBX Screenshot Utility
 
-Desktop app for Windows. Drop an FBX in, assign textures to the existing material slots, and build a turnaround sheet. Blender renders in the background. There is no live viewport.
+Desktop app for Windows. Build a turnaround sheet from an FBX or from views captured in ZBrush. FBX renders use Blender in the background. There is no live viewport.
 
 ## Requirements
 
 - Windows.
-- [Blender 4.5 or newer](https://www.blender.org/download/). 4.5 is the oldest version that works. Newer releases are fine. The sheet is rendered by Blender in the background.
+- [Blender 4.5 or newer](https://www.blender.org/download/) is required for FBX rendering. ZBrush image sheets do not need Blender.
 - Python is only needed to run from source or to build the folder. The packaged build does not include it.
 - [Python 3.13](https://www.python.org/downloads/windows/). Use the official Windows installer and keep the **py launcher** enabled. `py -3.13` comes from that installer.
 - Libraries, unchanged: PySide6 and Pillow, from `requirements.txt`.
@@ -95,3 +95,17 @@ It exports the meshes and starts a sheet in this utility, using the settings alr
 - A selection sends those meshes and their child meshes. With nothing selected, it sends every visible mesh.
 - Textures already on the materials stay in the FBX. Empty texture fields in the utility still keep whatever the file already has.
 - If this window is closed, the button opens it and then renders. Open the utility once so the addon knows where it lives. If it still cannot find it, set **Utility folder** in the addon preferences to this project folder.
+
+## ZBrush script
+
+The release includes `ScreenshotUtilityPrototype.txt` as a separate download. The script has been tried with ZBrush 2026.2.1. Compatibility with earlier versions has not yet been verified.
+
+To load the script, save the `.txt` file in a folder you can find again. In ZBrush, open **ZScript → Load** and choose that file. Open **ZPlugin → Screenshot Utility** to find the controls. Load the script again after restarting ZBrush. If an updated script does not replace the old controls, restart ZBrush before loading it.
+
+1. Open the model in Edit mode, choose the visible SubTools and MatCap, and position the starting view. A straight front view is recommended.
+2. Set **Views** to the number of images and click **Capture views**. Choose a folder and base name that do not already contain a series with that name. The script captures the current document with its background and material. It saves numbered PNG files and restores the starting view.
+3. In Screenshot Utility, set the caption, logo, gap and final sheet size as needed. Click **Build from ZBrush views** and select the image ending in `_0.png`. Choose where to save the sheet. The utility remembers the image folder for next time.
+
+Two views are 90° apart. Other counts are evenly spaced around a full turn. The output uses the current ZBrush preview and does not export geometry or start Blender. The utility crops the center of each view, so keep the model centered with room at the sides. For nonuniform backgrounds, the sheet background uses a color sampled from the first view.
+
+The resolution of the captured images depends on the **ZBrush document (canvas) size**, not the number of polygons. Set the document size in ZBrush before capturing. The **Long side** setting in Screenshot Utility controls the final sheet size and cannot recover detail missing from smaller source images. ZBrush's AAHalf view exports at half the document dimensions.

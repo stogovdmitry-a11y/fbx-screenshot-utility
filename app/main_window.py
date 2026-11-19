@@ -732,6 +732,9 @@ class MainWindow(QMainWindow):
         self.render_btn.clicked.connect(self.render)
         self.render_btn.setStyleSheet("padding: 8px 18px; font-weight: 600;")
         buttons.addWidget(self.render_btn)
+        self.zbrush_btn = QPushButton("Build from ZBrush views")
+        self.zbrush_btn.clicked.connect(self._build_zbrush_sheet)
+        buttons.addWidget(self.zbrush_btn)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setEnabled(False)
         self.cancel_btn.clicked.connect(self._cancel)
@@ -1057,6 +1060,7 @@ class MainWindow(QMainWindow):
 
     def _set_busy(self, busy):
         self.open_btn.setEnabled(not busy)
+        self.zbrush_btn.setEnabled(not busy)
         self.render_btn.setEnabled(not busy and bool(self._slots))
         self.reset_btn.setEnabled(not busy and bool(self._slots))
         self.split_btn.setEnabled(not busy and bool(self._slots))
@@ -1561,6 +1565,102 @@ class MainWindow(QMainWindow):
         if frames == 2:
             return 90.0
         return 360.0 / frames
+
+    def _build_zbrush_sheet(self):
+        saved_folder = str(self._settings.value("zbrush_views_dir", "") or "")
+        start_folder = saved_folder if saved_folder and Path(saved_folder).is_dir() else self._dir_hint()
+        first, _ = QFileDialog.getOpenFileName(
+            self, "Choose the first ZBrush view (_0.png)", start_folder, "PNG (*.png)"
+        )
+        if not first:
+            return
+        first_path = Path(first)
+        self._settings.setValue("zbrush_views_dir", str(first_path.resolve().parent))
+        if not first_path.stem.endswith("_0"):
+            QMessageBox.warning(self, "Screenshot Utility", "Choose the view ending in _0.png")
+            return
+        base = first_path.stem[:-2]
+        count_match = re.search(r"_views(\d+)$", base)
+        count = int(count_match.group(1)) if count_match else 4
+        if not 1 <= count <= 36:
+            QMessageBox.warning(self, "Screenshot Utility", "The view count must be between 1 and 36")
+            return
+        frames = [first_path.with_name(f"{base}_{index}.png") for index in range(count)]
+        use_masks = bool(count_match and base[:count_match.start()].endswith("_bpr"))
+        masks = [first_path.with_name(f"{base}_mask_{index}.bmp") for index in range(count)] if use_masks else []
+        missing = [path.name for path in frames + masks if not path.is_file()]
+        if missing:
+            QMessageBox.warning(self, "Screenshot Utility", "Missing views:\n" + "\n".join(missing))
+            return
+        sheet_base = base[:count_match.start()] if count_match else base
+        if use_masks:
+            sheet_base = sheet_base[:-4]
+        suggested = self._dated_output(self._output_dir() / f"{sheet_base}_sheet.png")
+        output, _ = QFileDialog.getSaveFileName(self, "Save sheet", suggested, "PNG (*.png)")
+        if not output:
+            return
+        if not output.lower().endswith(".png"):
+            output += ".png"
+        if Path(output).resolve() in {path.resolve() for path in frames}:
+            QMessageBox.warning(self, "Screenshot Utility", "Choose a different output file from the captured views")
+            return
+        logo = self.logo_edit.text().strip() if self.logo_enabled.isChecked() else ""
+        if logo and not Path(logo).is_file():
+            QMessageBox.warning(self, "Screenshot Utility", "Logo file not found")
+            return
+        if not use_masks:
+            try:
+                with Image.open(first_path) as image:
+                    # Sample the left edge of the area retained in the sheet.
+                    frame_width = min(image.width, max(1, round(image.height * 0.9)))
+                    x = (image.width - frame_width) // 2
+                    pixel = image.convert("RGB").getpixel((x, image.height // 2))
+            except (OSError, UnidentifiedImageError) as exc:
+                QMessageBox.warning(self, "Screenshot Utility", f"Cannot read the first ZBrush view:\n{exc}")
+                return
+            self._bg_color = QColor(*pixel)
+            self._paint_bg_button()
+        self.output_edit.setText(output)
+        self._remember_output_dir(output)
+        name = self.caption_name.text()
+        task = self.caption_task.text()
+        project = self.caption_project.text()
+        fonts = self._sheet_fonts()
+        background = (self._bg_color.red(), self._bg_color.green(), self._bg_color.blue())
+        gap = self.gap.value()
+        long_side = int(self.frame_size.currentData())
+
+        def work(thread):
+            with tempfile.TemporaryDirectory(prefix="screenshot-zbrush-") as folder:
+                size = None
+                for index, path in enumerate(frames):
+                    with Image.open(path) as image:
+                        if size is None:
+                            size = image.size
+                        elif image.size != size:
+                            raise ValueError("ZBrush views must all have the same dimensions")
+                        if use_masks:
+                            with Image.open(masks[index]) as mask:
+                                if mask.size != image.size:
+                                    raise ValueError(f"Mask size does not match view: {masks[index].name}")
+                                image = image.convert("RGBA")
+                                image.putalpha(mask.convert("L"))
+                        frame_width = min(image.width, max(1, round(image.height * 0.9)))
+                        if image.width > frame_width:
+                            left = (image.width - frame_width) // 2
+                            image = image.crop((left, 0, left + frame_width, image.height))
+                        image.save(Path(folder) / f"material_{index:02d}.png")
+                if thread.cancelled:
+                    return None
+                return str(build_sheet(
+                    folder, ["material"], len(frames), output, name, task,
+                    labels={"material": "MatCap"}, long_side=long_side,
+                    background=background, gap=gap, fonts=fonts, project=project, logo=logo,
+                ))
+
+        self.status.setText("Building the ZBrush sheet…")
+        self.progress.setRange(0, 0)
+        self._start(work, self._show_sheet)
 
     def render(self):
         fbx = self.fbx_edit.text().strip()
