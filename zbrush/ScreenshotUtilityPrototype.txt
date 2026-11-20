@@ -1,15 +1,37 @@
-// Export document views with the current material.
 // Load using ZScript > Load, then open ZPlugin > Screenshot Utility.
+[VarDef, suFolder, ""]
+[VarDef, suSettings, ""]
+[VarDef, suResult, 0]
 [ISubPalette, "ZPlugin:Screenshot Utility"]
 [ISlider, "ZPlugin:Screenshot Utility:Views", 4, 1, 1, 36, "Number of views to capture"]
-[IButton, "ZPlugin:Screenshot Utility:Capture views", "Save views of the current model",
+
+[IButton, "ZPlugin:Screenshot Utility:Choose output folder", "Choose where captured views are saved",
+    [VarDef, chosenFile, ""]
+    [VarSet, chosenFile, [FileNameAsk, "*.png", "ScreenshotUtility.png", "Choose output folder and press Save"]]
+    [If, [StrLength, chosenFile],
+        [VarSet, suFolder, [FileNameExtract, chosenFile, 1]]
+        [VarSet, suSettings, [FileNameResolvePath, "ZPUBLIC_ScreenshotUtilityViews.cfg"]]
+        [If, [MemGetSize, SUFolderData], [MemDelete, SUFolderData]]
+        [MemCreate, SUFolderData, 1024, 0]
+        [MemWriteString, SUFolderData, suFolder, 0]
+        [VarSet, suResult, [MemSaveToFile, SUFolderData, suSettings, 1]]
+        [MemDelete, SUFolderData]
+        [If, suResult > 0,
+            [Note, [StrMerge, "Output folder: ", suFolder]]
+        ,
+            [Note, "Could not save the output folder setting."]
+        ]
+    ]
+]
+
+[IButton, "ZPlugin:Screenshot Utility:Capture views", "Capture views into the chosen folder",
     [If, ![IGet, Transform:Edit],
         [Note, "Enter Edit mode with a 3D model before capturing."]
     ,
-        [VarDef, filePath, ""]
-        [VarDef, basePath, ""]
         [VarDef, framePath, ""]
-        [VarDef, exists, 0]
+        [VarDef, tempPath, ""]
+        [VarDef, previousCount, 0]
+        [VarDef, countPath, ""]
         [VarDef, px, 0][VarDef, py, 0][VarDef, pz, 0]
         [VarDef, sx, 0][VarDef, sy, 0][VarDef, sz, 0]
         [VarDef, rx, 0][VarDef, ry, 0][VarDef, rz, 0]
@@ -17,37 +39,81 @@
         [VarDef, viewCount, 4]
         [VarDef, step, 90]
         [VarDef, angle, 0]
-        [VarSet, exists, 0]
-        [VarSet, viewCount, [IGet, "ZPlugin:Screenshot Utility:Views"]]
-        [VarSet, step, (360 / viewCount)]
-        [If, viewCount == 2, [VarSet, step, 90]]
-        [VarSet, filePath, [FileNameAsk, "*.png", "ZBrushView.png", "Choose a name for the views"]]
-        [If, [StrLength, filePath],
-            [VarSet, basePath, [StrMerge, [FileNameExtract, filePath, 1], [FileNameExtract, filePath, 2]]]
-            [VarSet, basePath, [StrMerge, basePath, "_views", viewCount]]
+        [VarDef, failed, 0]
+        [VarSet, suFolder, ""]
+        [VarSet, suSettings, [FileNameResolvePath, "ZPUBLIC_ScreenshotUtilityViews.cfg"]]
+        [If, [FileExists, suSettings],
+            [If, [MemGetSize, SUFolderData], [MemDelete, SUFolderData]]
+            [If, [MemCreateFromFile, SUFolderData, suSettings] > 0,
+                [MemReadString, SUFolderData, suFolder, 0]
+                [MemDelete, SUFolderData]
+            ]
+        ]
+        [If, ![StrLength, suFolder],
+            [Note, "Choose an output folder first."]
+        ,
+            [VarSet, failed, 0]
+            [VarSet, viewCount, [IGet, "ZPlugin:Screenshot Utility:Views"]]
+            [VarSet, previousCount, 0]
+            [VarSet, countPath, [StrMerge, suFolder, "ScreenshotUtility_previous_views.zvr"]]
+            [If, [FileExists, countPath], [VarLoad, previousCount, countPath]]
+            [VarSet, step, (360 / viewCount)]
+            [If, viewCount == 2, [VarSet, step, 90]]
+            [TransformGet, px, py, pz, sx, sy, sz, rx, ry, rz]
+            // Capture the complete new series before replacing previous views.
             [Loop, viewCount,
-                [VarSet, framePath, [StrMerge, basePath, "_", n, ".png"]]
-                [If, [FileExists, framePath], [VarSet, exists, 1]]
+                [VarSet, angle, (n * step)]
+                [VarSet, frameRz, rz]
+                [If, (angle >= 90) && (angle < 270), [VarSet, frameRz, (rz + 180)]]
+                [TransformSet, px, py, pz, sx, sy, sz, rx, (ry + angle), frameRz]
+                [VarSet, tempPath, [StrMerge, suFolder, "ScreenshotUtility_capture_temp_", n, ".png"]]
+                [If, [FileExists, tempPath], [FileDelete, tempPath]]
+                [If, [FileExists, tempPath], [VarSet, failed, 1] [LoopExit]]
+                [FileNameSetNext, tempPath]
+                [IPress, Document:Export]
+                [If, ![FileExists, tempPath], [VarSet, failed, 1] [LoopExit]]
             , n]
-            [If, exists,
-                [Note, "A view file already exists. Choose a different name."]
-            ,
-                [TransformGet, px, py, pz, sx, sy, sz, rx, ry, rz]
+            [TransformSet, px, py, pz, sx, sy, sz, rx, ry, rz]
+            [If, !failed,
                 [Loop, viewCount,
-                    // ZBrush's Euler rotations need a roll correction for the middle views.
-                    [VarSet, angle, (n * step)]
-                    [VarSet, frameRz, rz]
-                    [If, (angle >= 90) && (angle < 270), [VarSet, frameRz, (rz + 180)]]
-                    [TransformSet, px, py, pz, sx, sy, sz, rx, (ry + angle), frameRz]
-                    [VarSet, framePath, [StrMerge, basePath, "_", n, ".png"]]
-                    [FileNameSetNext, framePath]
-                    [IPress, Document:Export]
+                    [VarSet, tempPath, [StrMerge, suFolder, "ScreenshotUtility_capture_temp_", n, ".png"]]
+                    [VarSet, framePath, [StrMerge, suFolder, "ScreenshotUtility_views", viewCount, "_", n, ".png"]]
+                    [If, [MemGetSize, SUFrameData], [MemDelete, SUFrameData]]
+                    [VarSet, suResult, [MemCreateFromFile, SUFrameData, tempPath]]
+                    [If, suResult <= 0, [VarSet, failed, 1] [LoopExit]]
+                    [VarSet, suResult, [MemSaveToFile, SUFrameData, framePath, 1]]
+                    [MemDelete, SUFrameData]
+                    [If, suResult <= 0, [VarSet, failed, 1] [LoopExit]]
                 , n]
-                [TransformSet, px, py, pz, sx, sy, sz, rx, ry, rz]
-                [Note, "Capture finished. Check the images in the chosen folder."]
+            ]
+            [If, (!failed) && (previousCount >= 1) && (previousCount <= 36) && (previousCount != viewCount),
+                // Remove the previous series when its number of views changes.
+                [Loop, previousCount,
+                    [VarSet, framePath, [StrMerge, suFolder, "ScreenshotUtility_views", previousCount, "_", n, ".png"]]
+                    [If, [FileExists, framePath],
+                        [FileDelete, framePath]
+                        [If, [FileExists, framePath], [VarSet, failed, 1] [LoopExit]]
+                    ]
+                , n]
+            ]
+            [If, !failed,
+                [VarSet, suResult, [VarSave, viewCount, countPath]]
+                [If, suResult <= 0, [VarSet, failed, 1]]
+            ]
+            [If, !failed,
+                [Loop, viewCount,
+                    [VarSet, tempPath, [StrMerge, suFolder, "ScreenshotUtility_capture_temp_", n, ".png"]]
+                    [If, [FileExists, tempPath], [FileDelete, tempPath]]
+                , n]
+            ]
+            [If, failed,
+                [Note, "Could not save all views. Check the output folder. Captured temporary files were kept."]
+            ,
+                [Note, "Capture finished. Previous ScreenshotUtility views were replaced."]
             ]
         ]
     ]
 ]
 [IEnable, "ZPlugin:Screenshot Utility:Views"]
+[IEnable, "ZPlugin:Screenshot Utility:Choose output folder"]
 [IEnable, "ZPlugin:Screenshot Utility:Capture views"]
