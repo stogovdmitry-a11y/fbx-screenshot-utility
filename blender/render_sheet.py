@@ -706,9 +706,31 @@ def render_wire(
     exposure=0.15,
     bloom=1.0,
     ground=None,
+    use_textures=True,
+    base_color=None,
+    roughness=0.5,
+    unlit=False,
 ):
     """Edges sit on the shaded mesh. The mesh itself hides whatever is behind it."""
-    apply_pass(pass_name, resolved)
+    if use_textures:
+        if unlit and pass_name == "material":
+            pass_name = "basecolor"
+        apply_pass(pass_name, resolved)
+    else:
+        pass_name = "basecolor" if unlit else "material"
+        rgb = tuple(srgb_to_linear(channel) for channel in (base_color or [0.7, 0.7, 0.7]))
+        for mat in sheetlib.materials_in_order():
+            tree = reset_tree(mat)
+            if unlit:
+                shader = tree.nodes.new("ShaderNodeEmission")
+                shader.inputs["Color"].default_value = (*rgb, 1.0)
+                output_node(tree, shader.outputs["Emission"], None)
+            else:
+                shader = tree.nodes.new("ShaderNodeBsdfPrincipled")
+                shader.inputs["Base Color"].default_value = (*rgb, 1.0)
+                shader.inputs["Roughness"].default_value = max(0.0, min(1.0, roughness))
+                output_node(tree, shader.outputs["BSDF"], None)
+            set_surface_mode(mat, False)
     if pass_name in DATA_PASSES:
         view_name = "Raw"
     elif pass_name == "material":
@@ -903,6 +925,10 @@ def main():
             float(job.get("exposure", 0.15)),
             bloom,
             ground,
+            bool(wire.get("use_textures", True)),
+            wire.get("base_color"),
+            float(wire.get("roughness", 0.5)),
+            bool(wire.get("unlit", False)),
         )
     print("RESULT ok", flush=True)
 

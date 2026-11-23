@@ -644,6 +644,25 @@ class MainWindow(QMainWindow):
         if material_index >= 0:
             self.grid_pass.setCurrentIndex(material_index)
         grid_form.addRow("Type", self.grid_pass)
+        self.grid_use_textures = QCheckBox("Use Textures")
+        self.grid_use_textures.setChecked(True)
+        self.grid_use_textures.toggled.connect(self._update_grid_material_controls)
+        grid_form.addRow(self.grid_use_textures)
+        self.grid_unlit = QCheckBox("Unlit")
+        self.grid_unlit.setToolTip("Render the wireframe surface without lighting. Roughness has no effect in this mode.")
+        self.grid_unlit.toggled.connect(self._update_grid_material_controls)
+        grid_form.addRow(self.grid_unlit)
+        self._grid_base_color = QColor("#b3b3b3")
+        self.grid_base_color_btn = QPushButton()
+        self.grid_base_color_btn.setFixedWidth(72)
+        self.grid_base_color_btn.clicked.connect(self._pick_grid_base_color)
+        grid_form.addRow("Base Color", self.grid_base_color_btn)
+        self._paint_grid_base_color_button()
+        self.grid_roughness = QDoubleSpinBox()
+        self.grid_roughness.setRange(0.0, 1.0)
+        self.grid_roughness.setSingleStep(0.05)
+        self.grid_roughness.setValue(0.5)
+        grid_form.addRow("Roughness", self.grid_roughness)
         self.grid_thickness = QSpinBox()
         self.grid_thickness.setRange(1, 32)
         self.grid_thickness.setValue(2)
@@ -818,6 +837,14 @@ class MainWindow(QMainWindow):
         grid_index = self.grid_pass.findData(grid_pass)
         if grid_index >= 0:
             self.grid_pass.setCurrentIndex(grid_index)
+        self.grid_use_textures.setChecked(self._settings.value("grid_use_textures", True) in (True, "true", "1"))
+        self.grid_unlit.setChecked(self._settings.value("grid_unlit", False) in (True, "true", "1"))
+        self._grid_base_color = QColor(str(self._settings.value("grid_base_color", "#b3b3b3") or "#b3b3b3"))
+        if not self._grid_base_color.isValid():
+            self._grid_base_color = QColor("#b3b3b3")
+        self._paint_grid_base_color_button()
+        self.grid_roughness.setValue(float(self._settings.value("grid_roughness", 0.5)))
+        self._update_grid_material_controls()
         self.grid_thickness.setValue(int(self._settings.value("grid_thickness", 2)))
         saved_color = self._settings.value("wire_color", "#111111") or "#111111"
         self._wire_color = QColor(str(saved_color))
@@ -874,6 +901,10 @@ class MainWindow(QMainWindow):
         self._settings.setValue("logo_enabled", self.logo_enabled.isChecked())
         self._settings.setValue("grid_enabled", self.grid_enabled.isChecked())
         self._settings.setValue("grid_pass", self.grid_pass.currentData())
+        self._settings.setValue("grid_use_textures", self.grid_use_textures.isChecked())
+        self._settings.setValue("grid_unlit", self.grid_unlit.isChecked())
+        self._settings.setValue("grid_base_color", self._grid_base_color.name())
+        self._settings.setValue("grid_roughness", self.grid_roughness.value())
         self._settings.setValue("grid_thickness", self.grid_thickness.value())
         self._settings.setValue("wire_color", self._wire_color.name())
         self._settings.setValue("output_path", self.output_edit.text().strip())
@@ -1478,9 +1509,18 @@ class MainWindow(QMainWindow):
         }
 
     def _set_grid_enabled(self, enabled):
-        self.grid_pass.setEnabled(enabled)
+        self.grid_use_textures.setEnabled(enabled)
+        self.grid_unlit.setEnabled(enabled)
+        self._update_grid_material_controls()
         self.grid_thickness.setEnabled(enabled)
         self.wire_color_btn.setEnabled(enabled)
+
+    def _update_grid_material_controls(self, *_args):
+        enabled = self.grid_enabled.isChecked()
+        use_textures = self.grid_use_textures.isChecked()
+        self.grid_pass.setEnabled(enabled and use_textures)
+        self.grid_base_color_btn.setEnabled(enabled and not use_textures)
+        self.grid_roughness.setEnabled(enabled and not use_textures and not self.grid_unlit.isChecked())
 
     def _fit_number(self, spin):
         text = spin.textFromValue(spin.maximum())
@@ -1508,6 +1548,19 @@ class MainWindow(QMainWindow):
             "QScrollBar:vertical { width: 0px; }"
             "QScrollBar:horizontal { height: 0px; }"
         )
+
+    def _paint_grid_base_color_button(self):
+        self.grid_base_color_btn.setStyleSheet(
+            self._swatch_style(self._grid_base_color)
+            + "QPushButton:disabled { background: #555; color: #999; }"
+        )
+        self.grid_base_color_btn.setText(self._grid_base_color.name())
+
+    def _pick_grid_base_color(self):
+        chosen = QColorDialog.getColor(self._grid_base_color, self, "Mesh base color")
+        if chosen.isValid():
+            self._grid_base_color = chosen
+            self._paint_grid_base_color_button()
 
     def _paint_wire_button(self):
         color = self._wire_color.name()
@@ -1548,7 +1601,11 @@ class MainWindow(QMainWindow):
             return None
         color = self._wire_color
         return {
-            "pass": self.grid_pass.currentData(),
+            "pass": self.grid_pass.currentData() if self.grid_use_textures.isChecked() else "material",
+            "use_textures": self.grid_use_textures.isChecked(),
+            "unlit": self.grid_unlit.isChecked(),
+            "base_color": [self._grid_base_color.redF(), self._grid_base_color.greenF(), self._grid_base_color.blueF()],
+            "roughness": self.grid_roughness.value(),
             "thickness": self.grid_thickness.value(),
             "color": [color.redF(), color.greenF(), color.blueF()],
         }

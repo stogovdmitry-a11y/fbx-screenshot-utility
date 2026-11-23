@@ -19,13 +19,21 @@ Desktop app for Windows. Build a turnaround sheet from an FBX or from views capt
 - Builds one PNG sheet. Each row is a pass, each column is a camera angle.
 - The **Long side** value is the long side of the finished sheet, not of a single frame.
 - Camera: frame count, start angle, distance scale, and height as a fraction of the model. The cameras are spaced evenly around a full turn. Two frames are front and side, 90° apart. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
-- Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass.
+- Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass. Turn off **Use Textures** in Wireframe row to render a solid mesh with a chosen Base Color and Roughness (0–1). Enable **Unlit** to render the surface without lighting; Roughness has no effect in this mode.
 - The lit Material row gets a soft disc under the feet, so the character reads as standing on something. It is not a shadow from the key light, and the flat texture rows do not get it.
 - Under each texture row name the sheet prints that map's resolution, for example `4096×4096`. Material and wireframe rows skip it. If several slots disagree, the sizes are listed side by side.
 - Background color is shared by the render and the sheet padding.
 - **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window, scaled to fit that window. Last folders, texture assignments, and options are remembered.
 - The title bar shows the version. **GitHub**, next to the version at the bottom left, opens the repository.
 - On startup, the app checks for a newer stable release and displays a link next to **GitHub** when one is available.
+
+## Wireframe row
+
+Enable **Wireframe row** to add a separate row with mesh edges. **Type** selects the pass under the wireframe; **Thickness** and **Color** control the edges. **Use Textures** is on by default and uses the assigned or imported textures for the selected pass.
+
+Turn **Use Textures** off to render an opaque mesh with a uniform **Base Color** and a numeric **Roughness** from 0 (smooth) to 1 (rough). This uses the lit material setup and does not change the other sheet rows. **Type** is unavailable in this mode.
+
+Enable **Unlit** to render the surface without lighting. With textures on, the Material pass uses Base Color; other passes retain their existing unlit appearance. With textures off, the chosen Base Color is used directly. Roughness has no effect in Unlit mode and its control is disabled. All wireframe settings are remembered between launches.
 
 ## On the sheet
 
