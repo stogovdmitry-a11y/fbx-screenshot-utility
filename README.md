@@ -16,12 +16,13 @@ Desktop app for Windows. Build a turnaround sheet from an FBX or from views capt
 
 - Reads an FBX and keeps the material slot names. Head and hair stay separate.
 - An empty texture field keeps whatever is already stored in the FBX.
+- When sent from Blender, the Material row uses the original assigned Blender materials, and Base Color uses the original Principled Base Color node graph without lighting. The other rows still use the imported or assigned texture maps. Select the same Blender version as the source scene in the app.
 - Builds one PNG sheet. Each row is a pass, each column is a camera angle.
 - The **Long side** value is the long side of the finished sheet, not of a single frame.
 - Camera: frame count, start angle, distance scale, and height as a fraction of the model. The cameras are spaced evenly around a full turn. Two frames are front and side, 90° apart. `0°` looks from the chosen front (`−Y`, `+Y`, `−X`, `+X`). Up is Z.
 - Optional rows: Base Color (unlit), Normal, and a lit Material. Wireframe can be added as its own row, in a chosen color, over a chosen pass. Turn off **Use Textures** in Wireframe row to render a solid mesh with a chosen Base Color and Roughness (0–1). Enable **Unlit** to render the surface without lighting; Roughness has no effect in this mode.
 - The lit Material row gets a soft disc under the feet, so the character reads as standing on something. It is not a shadow from the key light, and the flat texture rows do not get it.
-- Under each texture row name the sheet prints that map's resolution, for example `4096×4096`. Material and wireframe rows skip it. If several slots disagree, the sizes are listed side by side.
+- **Texture resolution** controls whether each texture row shows the map's resolution, for example `4096×4096`. Material and wireframe rows skip it. If several slots disagree, the sizes are listed side by side.
 - Background color is shared by the render and the sheet padding.
 - **Build sheet (F12)** writes the PNG. The path row just above the button is **Output Directory**. The sheet can open in its own window, scaled to fit that window. Last folders, texture assignments, and options are remembered.
 - The title bar shows the version. **GitHub**, next to the version at the bottom left, opens the repository.
@@ -90,7 +91,7 @@ py -3.13 -m venv .venv
 
 That installs the window toolkit and the image library. Launch `Screenshot Utility.bat` after that. If `blender.exe` is not in `C:\Program Files\Blender Foundation\Blender 4.5\`, set the path at the bottom of the window.
 
-`scripts\build_folder.bat` packs the utility into `dist\Screenshot Utility\`. Run `Screenshot Utility.exe` in that folder. Blender is not included.
+`scripts\build_folder.bat` packs the utility into its fixed location, `dist\Screenshot Utility\`. Run `Screenshot Utility.exe` in that folder. Blender is not included.
 
 ## Blender addon
 
@@ -99,6 +100,12 @@ That installs the window toolkit and the image library. Launch `Screenshot Utili
 The button is **Build Screen List**. It sits in the top right corner of the Blender window and has a monitor icon.
 
 It exports the meshes and starts a sheet in this utility, using the settings already set here (angles, passes, background, captions).
+
+Blender sends use a private system temporary folder for the FBX and material library. The utility removes those files when it closes. The finished sheet goes to the selected output folder, which is remembered between sends.
+
+For Blender sends, Material uses the assigned Blender shaders and Base Color renders the Principled Base Color graph without lighting. For materials without a Principled shader, Base Color falls back to the texture imported from the FBX. Normal and other map rows still use imported or manually assigned maps. Blender's lighting and color management can differ from the utility's render setup.
+
+Update both the utility and the addon when upgrading to 1.3.2. Blender and the utility must use the same Blender version to read the temporary material library. Files exported by earlier addon versions remain where they were saved; the new cleanup only removes temporary exports created by the current addon and handled by the current utility.
 
 - A selection sends those meshes and their child meshes. With nothing selected, it sends every visible mesh.
 - Textures already on the materials stay in the FBX. Empty texture fields in the utility still keep whatever the file already has.

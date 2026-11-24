@@ -4,6 +4,8 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +15,7 @@ from bpy.props import StringProperty
 bl_info = {
     "name": "Screenshot Utility",
     "author": "Dmitry Stogov",
-    "version": (1, 2, 2),
+    "version": (1, 2, 4),
     "blender": (4, 5, 0),
     "location": "Top bar",
     "description": "Send the current meshes to Screenshot Utility and render a turnaround sheet",
@@ -22,7 +24,6 @@ bl_info = {
 
 HOME = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"))) / "ScreenshotUtility"
 INBOX = HOME / "inbox"
-EXPORTS = HOME / "exports"
 APP = HOME / "app.json"
 
 _MODES = {
@@ -71,21 +72,29 @@ class SCREENSHOTUTILITY_OT_send(bpy.types.Operator):
                 self.report({"WARNING"}, "The scene has no visible meshes")
             return {"CANCELLED"}
 
-        EXPORTS.mkdir(parents=True, exist_ok=True)
         INBOX.mkdir(parents=True, exist_ok=True)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        fbx = EXPORTS / f"{_safe(_label(meshes))}_{stamp}.fbx"
+        export_dir = Path(tempfile.mkdtemp(prefix="screenshot-utility-export-"))
+        fbx = export_dir / f"{_safe(_label(meshes))}_{stamp}.fbx"
         try:
             _export(context, meshes, fbx)
+            _export_materials(meshes, fbx.with_suffix(".materials.blend"))
         except Exception as exc:
-            self.report({"ERROR"}, f"FBX export failed: {exc}")
+            shutil.rmtree(export_dir, ignore_errors=True)
+            self.report({"ERROR"}, f"Export failed: {exc}")
             return {"CANCELLED"}
 
-        request = INBOX / f"{stamp}.json"
-        payload = {"fbx": str(fbx), "render": True, "name": _label(meshes)}
+        request = INBOX / f"{stamp}_{export_dir.name}.json"
+        payload = {"fbx": str(fbx), "render": True, "name": _label(meshes), "temporary_export": True}
         tmp = request.with_suffix(".tmp")
-        tmp.write_text(json.dumps(payload), encoding="utf-8")
-        tmp.replace(request)
+        try:
+            tmp.write_text(json.dumps(payload), encoding="utf-8")
+            tmp.replace(request)
+        except OSError as exc:
+            tmp.unlink(missing_ok=True)
+            shutil.rmtree(export_dir, ignore_errors=True)
+            self.report({"ERROR"}, f"Could not send request: {exc}")
+            return {"CANCELLED"}
 
         launched, problem = _ensure_utility()
         if problem:
@@ -177,6 +186,12 @@ def _export(context, meshes, filepath):
                 pass
     if result != {"FINISHED"}:
         raise RuntimeError(str(set(result)))
+
+
+def _export_materials(meshes, filepath):
+    materials = {slot.material for obj in meshes for slot in obj.material_slots if slot.material}
+    if materials:
+        bpy.data.libraries.write(str(filepath), materials, path_remap="ABSOLUTE", compress=True)
 
 
 def _ensure_utility():

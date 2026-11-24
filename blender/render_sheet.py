@@ -405,24 +405,41 @@ def setup_render(scene, frame_size, extent):
 
 def setup_bloom(scene, strength):
     """A small halo around emission. Flat rows leave compositing off."""
-    scene.use_nodes = True
     scene.render.use_compositing = False
+    if strength <= 0:
+        return
     # The Emit socket only exists once the pass is on, and only on a node made after that.
     for layer in scene.view_layers:
         layer.use_pass_emit = True
-    tree = scene.node_tree
+    if hasattr(scene, "compositing_node_group"):
+        tree = bpy.data.node_groups.new("SheetCompositor", "CompositorNodeTree")
+        tree.interface.new_socket(name="Image", in_out="OUTPUT", socket_type="NodeSocketColor")
+        scene.compositing_node_group = tree
+    else:
+        scene.use_nodes = True
+        tree = scene.node_tree
     tree.nodes.clear()
     layers = tree.nodes.new("CompositorNodeRLayers")
     layers.location = (-720, 0)
     glare = tree.nodes.new("CompositorNodeGlare")
-    glare.glare_type = "BLOOM"
-    glare.quality = "HIGH"
+    if hasattr(glare, "glare_type"):
+        glare.glare_type = "BLOOM"
+        glare.quality = "HIGH"
+    else:
+        glare.inputs["Type"].default_value = "Bloom"
+        glare.inputs["Quality"].default_value = "High"
     glare.location = (-440, -200)
     glare.inputs["Threshold"].default_value = 0.15
     glare.inputs["Strength"].default_value = max(0.0, float(strength))
     glare.inputs["Size"].default_value = 0.35
     glare.inputs["Smoothness"].default_value = 0.2
-    tree.links.new(layers.outputs["Emit"], glare.inputs["Image"])
+    if hasattr(scene, "compositing_node_group"):
+        tree.links.new(layers.outputs["Image"], glare.inputs["Image"])
+        out = tree.nodes.new("NodeGroupOutput")
+        tree.links.new(glare.outputs["Image"], out.inputs["Image"])
+        return
+    emission = layers.outputs.get("Emit") or layers.outputs["Emission"]
+    tree.links.new(emission, glare.inputs["Image"])
     add = tree.nodes.new("CompositorNodeMixRGB")
     add.blend_type = "ADD"
     add.use_clamp = False
@@ -679,6 +696,64 @@ def apply_pass(pass_name, resolved):
             build_lit(mat, images, images["invert_g"])
 
 
+def source_basecolor_material(material):
+    """Render the original Principled Base Color graph without lighting."""
+    if sheetlib.find_principled(material) is None:
+        return None
+    result = material.copy()
+    tree = result.node_tree
+    principled = sheetlib.find_principled(result)
+    base = principled.inputs["Base Color"]
+    emit = tree.nodes.new("ShaderNodeEmission")
+    if base.is_linked:
+        tree.links.new(base.links[0].from_socket, emit.inputs["Color"])
+    else:
+        emit.inputs["Color"].default_value = base.default_value
+    alpha = principled.inputs.get("Alpha")
+    shader = emit.outputs["Emission"]
+    if alpha is not None and (alpha.is_linked or alpha.default_value < 1.0):
+        transparent = tree.nodes.new("ShaderNodeBsdfTransparent")
+        mix = tree.nodes.new("ShaderNodeMixShader")
+        if alpha.is_linked:
+            tree.links.new(alpha.links[0].from_socket, mix.inputs[0])
+        else:
+            mix.inputs[0].default_value = alpha.default_value
+        tree.links.new(transparent.outputs[0], mix.inputs[1])
+        tree.links.new(shader, mix.inputs[2])
+        shader = mix.outputs[0]
+    outputs = [node for node in tree.nodes if node.type == "OUTPUT_MATERIAL" and node.is_active_output]
+    if not outputs:
+        outputs = [tree.nodes.new("ShaderNodeOutputMaterial")]
+    for output in outputs:
+        tree.links.new(shader, output.inputs["Surface"])
+    return result
+
+
+def load_source_materials(fbx, meshes, synthetic_slots=()):
+    """Keep Blender-origin materials separate from the generated pass materials."""
+    library = Path(fbx).with_suffix(".materials.blend")
+    if not library.is_file():
+        return []
+    slots = [(slot, slot.material) for obj in meshes for index, slot in enumerate(obj.material_slots)
+             if slot.material and (obj.name, index) not in synthetic_slots]
+    if not slots:
+        return []
+    names = {mat.name for _, mat in slots}
+    with bpy.data.libraries.load(str(library), link=False) as (source, target):
+        missing = names - set(source.materials)
+        if missing:
+            raise RuntimeError("Blender materials not found in source library: " + ", ".join(sorted(missing)))
+        target.materials = sorted(names)
+    originals = dict(zip(sorted(names), target.materials))
+    basecolors = {name: source_basecolor_material(mat) for name, mat in originals.items()}
+    return [(slot, mat, originals[mat.name], basecolors[mat.name]) for slot, mat in slots]
+
+
+def select_source_materials(slots, use_source):
+    for slot, generated, original, basecolor in slots:
+        slot.material = (basecolor or generated) if use_source == "basecolor" else original if use_source else generated
+
+
 def render_wire(
     scene,
     camera,
@@ -710,12 +785,21 @@ def render_wire(
     base_color=None,
     roughness=0.5,
     unlit=False,
+    source_materials=(),
 ):
     """Edges sit on the shaded mesh. The mesh itself hides whatever is behind it."""
+    select_source_materials(source_materials, False)
     if use_textures:
         if unlit and pass_name == "material":
             pass_name = "basecolor"
-        apply_pass(pass_name, resolved)
+        if pass_name == "material" and source_materials:
+            apply_pass(pass_name, resolved)
+            select_source_materials(source_materials, True)
+        elif pass_name == "basecolor" and source_materials:
+            apply_pass(pass_name, resolved)
+            select_source_materials(source_materials, "basecolor")
+        else:
+            apply_pass(pass_name, resolved)
     else:
         pass_name = "basecolor" if unlit else "material"
         rgb = tuple(srgb_to_linear(channel) for channel in (base_color or [0.7, 0.7, 0.7]))
@@ -810,6 +894,9 @@ def main():
     job = json.loads(Path(job_path).read_text(encoding="utf-8"))
     sheetlib.clear_scene()
     sheetlib.import_fbx(job["fbx"])
+    synthetic_slots = {(obj.name, index) for obj in sheetlib.mesh_objects()
+                       for index, slot in enumerate(obj.material_slots) if slot.material is None}
+    synthetic_slots.update((obj.name, 0) for obj in sheetlib.mesh_objects() if not obj.material_slots)
     sheetlib.ensure_materials()
     meshes = sheetlib.mesh_objects()
     minimum, maximum = sheetlib.world_bounds(meshes)
@@ -817,6 +904,7 @@ def main():
     extent = maximum - minimum
     snapshots = {mat.name: sheetlib.snapshot_material(mat) for mat in sheetlib.materials_in_order()}
     resolved = resolve_materials(job, snapshots)
+    source_materials = load_source_materials(job["fbx"], meshes, synthetic_slots)
 
     scene = bpy.context.scene
     setup_render(scene, int(job["frame_size"]), extent)
@@ -862,7 +950,15 @@ def main():
     raytracing = bool(job.get("raytracing", True))
     cycles = bool(job.get("cycles", False))
     for pass_name in passes:
-        apply_pass(pass_name, resolved)
+        select_source_materials(source_materials, False)
+        if pass_name == "material" and source_materials:
+            apply_pass(pass_name, resolved)
+            select_source_materials(source_materials, True)
+        elif pass_name == "basecolor" and source_materials:
+            apply_pass(pass_name, resolved)
+            select_source_materials(source_materials, "basecolor")
+        else:
+            apply_pass(pass_name, resolved)
         if pass_name in DATA_PASSES:
             view_name = "Raw"
         elif pass_name == "material":
@@ -929,6 +1025,7 @@ def main():
             wire.get("base_color"),
             float(wire.get("roughness", 0.5)),
             bool(wire.get("unlit", False)),
+            source_materials,
         )
     print("RESULT ok", flush=True)
 

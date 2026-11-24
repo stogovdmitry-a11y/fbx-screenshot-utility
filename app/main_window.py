@@ -50,7 +50,7 @@ from PySide6.QtWidgets import (
 from PIL import Image, UnidentifiedImageError
 
 from app import VERSION
-from app.bridge import publish, take_request, unpublish
+from app.bridge import publish, remove_temporary_export, take_request, temporary_export_path, unpublish
 from app.composite import PASS_LABELS, build_sheet, frame_size_for_long_side
 from app.paths import resource_root
 from app.runner import DEFAULT_BLENDER, BlenderError, inspect_fbx, render_sheet
@@ -293,6 +293,7 @@ class MainWindow(QMainWindow):
         self._preview_path = ""
         self._sheet_window = None
         self._loaded_fbx = ""
+        self._temporary_exports = set()
         self._triangles = None
         self._loading_slots = False
         self._render_after_load = False
@@ -427,7 +428,7 @@ class MainWindow(QMainWindow):
         row.addWidget(self.open_btn)
         column.addLayout(row)
 
-        hint = QLabel("An empty map keeps whatever is already in the FBX. Slots stay as in the file, head and hair separate.")
+        hint = QLabel("An empty map keeps the texture from the FBX. Blender sends also use the original materials for the Material row.")
         hint.setWordWrap(True)
         hint.setStyleSheet("color: #a8a8a8;")
         column.addWidget(hint)
@@ -693,12 +694,15 @@ class MainWindow(QMainWindow):
         self.separate_window.toggled.connect(self._toggle_separate_preview)
         self.triangles_enabled = QCheckBox("Triangle count")
         self.triangles_enabled.setToolTip("Prints Triangles Count just above the dark footer.")
+        self.texture_sizes_enabled = QCheckBox("Texture resolution")
+        self.texture_sizes_enabled.setToolTip("Prints texture dimensions under each texture row label.")
 
         checks = QVBoxLayout()
         checks.addWidget(self.date_in_name)
         checks.addWidget(self.number_if_exists)
         checks.addWidget(self.separate_window)
         checks.addWidget(self.triangles_enabled)
+        checks.addWidget(self.texture_sizes_enabled)
         checks.addSpacing(10)
         logo_row = QHBoxLayout()
         self.logo_enabled = QCheckBox("Logo")
@@ -829,6 +833,7 @@ class MainWindow(QMainWindow):
         self.number_if_exists.setChecked(self._settings.value("number_if_exists", False) in (True, "true", "1"))
         self.separate_window.setChecked(self._settings.value("separate_window", False) in (True, "true", "1"))
         self.triangles_enabled.setChecked(self._settings.value("triangles_enabled", False) in (True, "true", "1"))
+        self.texture_sizes_enabled.setChecked(self._settings.value("texture_sizes_enabled", True) in (True, "true", "1"))
         self.extract_opacity.setChecked(self._settings.value("extract_opacity", False) in (True, "true", "1"))
         self.logo_edit.setText(self._settings.value("logo_path", "") or "")
         self.logo_enabled.setChecked(self._settings.value("logo_enabled", False) in (True, "true", "1"))
@@ -896,6 +901,7 @@ class MainWindow(QMainWindow):
         self._settings.setValue("number_if_exists", self.number_if_exists.isChecked())
         self._settings.setValue("separate_window", self.separate_window.isChecked())
         self._settings.setValue("triangles_enabled", self.triangles_enabled.isChecked())
+        self._settings.setValue("texture_sizes_enabled", self.texture_sizes_enabled.isChecked())
         self._settings.setValue("extract_opacity", self.extract_opacity.isChecked())
         self._settings.setValue("logo_path", self.logo_edit.text().strip())
         self._settings.setValue("logo_enabled", self.logo_enabled.isChecked())
@@ -912,18 +918,23 @@ class MainWindow(QMainWindow):
         self._settings.setValue("font_labels", self.font_labels.value())
         self._settings.setValue("font_caption", self.font_caption.value())
         self._settings.setValue("font_date", self.font_date.value())
-        if self._loaded_fbx:
+        if self._loaded_fbx and self._loaded_fbx not in self._temporary_exports:
             self._settings.setValue("last_fbx", self._loaded_fbx)
         self._save_textures()
 
     def closeEvent(self, event):
+        if self._thread is not None and self._thread.isRunning():
+            self._thread.cancel()
+            if not self._thread.wait(3000):
+                self.status.setText("Stopping the current job; close again when it finishes")
+                event.ignore()
+                return
         unpublish()
         self._save_settings()
         if self._sheet_window is not None:
             self._sheet_window.close()
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.cancel()
-            self._thread.wait(3000)
+        for fbx in self._temporary_exports:
+            remove_temporary_export(fbx)
         super().closeEvent(event)
 
     def dragEnterEvent(self, event: QDragEnterEvent):
@@ -1164,6 +1175,12 @@ class MainWindow(QMainWindow):
         if not Path(fbx).is_file():
             self.status.setText("Blender sent a file, but it is already gone")
             return False
+        if request.get("temporary_export"):
+            temporary = temporary_export_path(fbx)
+            if temporary is None:
+                self.status.setText("Blender sent an invalid temporary export path")
+                return False
+            self._temporary_exports.add(str(temporary))
         name = str(request.get("name") or "").strip()
         if name and not self.caption_name.text().strip():
             self.caption_name.setText(name)
@@ -1173,7 +1190,7 @@ class MainWindow(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.status.setText("From Blender…")
-        self.load_fbx(follow_fbx=True)
+        self.load_fbx(follow_fbx=True, from_blender=True)
         return True
 
     def _on_progress(self, done, total, pass_name):
@@ -1190,7 +1207,7 @@ class MainWindow(QMainWindow):
         lines = [line for line in text.strip().splitlines() if line.strip()]
         QMessageBox.warning(self, "Screenshot Utility", "\n".join(lines[-12:]) or "Failed")
 
-    def load_fbx(self, follow_fbx=False):
+    def load_fbx(self, follow_fbx=False, from_blender=False):
         fbx = self.fbx_edit.text().strip()
         if not fbx:
             return
@@ -1198,12 +1215,19 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Screenshot Utility", "FBX not found")
             return
         folder = Path(fbx).resolve().parent
-        self._settings.setValue("fbx_dir", str(folder))
-        self._settings.setValue("last_fbx", str(Path(fbx).resolve()))
+        if str(Path(fbx).resolve()) not in self._temporary_exports:
+            self._settings.setValue("fbx_dir", str(folder))
+            self._settings.setValue("last_fbx", str(Path(fbx).resolve()))
         # The save folder follows the FBX only when the user picks a new file.
         # A restart reloads the last FBX and keeps the folder from last time.
         if follow_fbx:
-            self._settings.setValue("output_dir", str(folder))
+            if not from_blender:
+                self._settings.setValue("output_dir", str(folder))
+            else:
+                saved = self._settings.value("output_dir", "") or ""
+                if not saved or not Path(str(saved)).is_dir() or Path(str(saved)).resolve() == folder:
+                    pictures = Path.home() / "Pictures"
+                    self._settings.setValue("output_dir", str(pictures if pictures.is_dir() else Path.home()))
             self.date_in_name.setChecked(True)
             self._output_auto = True
             self.output_edit.setText(self._auto_output(fbx))
@@ -1410,7 +1434,7 @@ class MainWindow(QMainWindow):
         return saved if isinstance(saved, dict) else {}
 
     def _save_textures(self, *_args):
-        if self._loading_slots or not self._loaded_fbx or not self._slots:
+        if self._loading_slots or not self._loaded_fbx or self._loaded_fbx in self._temporary_exports or not self._slots:
             return
         store = self._texture_store()
         store[self._loaded_fbx] = self._collect_materials()
@@ -1769,7 +1793,7 @@ class MainWindow(QMainWindow):
         caption_task = self.caption_task.text()
         caption_project = self.caption_project.text()
         labels = self._pass_labels()
-        sizes = self._sheet_sizes(materials)
+        sizes = self._sheet_sizes(materials) if self.texture_sizes_enabled.isChecked() else {}
         sheet_side = int(self.frame_size.currentData())
         show_triangles = self.triangles_enabled.isChecked()
         gap = self.gap.value()

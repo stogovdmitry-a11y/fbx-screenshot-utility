@@ -3,6 +3,8 @@
 import ctypes
 import json
 import os
+import shutil
+import tempfile
 import time
 from pathlib import Path
 
@@ -13,6 +15,33 @@ HOME = Path(os.environ.get("LOCALAPPDATA", str(Path.home() / "AppData" / "Local"
 INBOX = HOME / "inbox"
 EXPORTS = HOME / "exports"
 APP = HOME / "app.json"
+
+
+def temporary_export_path(fbx):
+    """Accept only a private export directory created directly under the system temp folder."""
+    path = Path(fbx).resolve()
+    folder = path.parent
+    if (folder.parent != Path(tempfile.gettempdir()).resolve()
+            or not folder.name.startswith("screenshot-utility-export-")
+            or path.suffix.lower() != ".fbx"):
+        return None
+    return path
+
+
+def remove_temporary_export(fbx):
+    path = temporary_export_path(fbx)
+    if path is None:
+        return
+    for item in (path, path.with_suffix(".materials.blend")):
+        try:
+            item.unlink(missing_ok=True)
+        except OSError:
+            pass
+    shutil.rmtree(path.with_suffix(".fbm"), ignore_errors=True)
+    try:
+        path.parent.rmdir()
+    except OSError:
+        pass
 
 
 def publish():
@@ -53,7 +82,7 @@ def _sweep_exports():
     if not EXPORTS.is_dir():
         return
     cutoff = time.time() - 2 * 24 * 3600
-    for path in EXPORTS.glob("*.fbx"):
+    for path in list(EXPORTS.glob("*.fbx")) + list(EXPORTS.glob("*.materials.blend")):
         try:
             if path.stat().st_mtime < cutoff:
                 path.unlink()
